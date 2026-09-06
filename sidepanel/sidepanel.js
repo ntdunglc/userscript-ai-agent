@@ -371,11 +371,12 @@
   // DOM Scanning & Dehydration
   // -------------------------------------------------------------
 
-  async function scanActivePageDom() {
-    if (!activeTab || !activeTab.id) return null;
+  async function scanActivePageDom(tabId = null) {
+    const targetId = tabId || activeTab?.id;
+    if (!targetId) return null;
     try {
       const results = await chrome.scripting.executeScript({
-        target: { tabId: activeTab.id },
+        target: { tabId: targetId },
         func: DomDehydrator.scanPage
       });
       return results?.[0]?.result || null;
@@ -718,12 +719,14 @@
     const apiKey = config.geminiApiKey;
     const model = config.geminiModel || 'gemini-flash-latest';
     const customInstructions = config.customInstructions || '';
+    const requestTabId = activeTab?.id;
+    const requestTabUrl = activeTab?.url || '';
 
     // First, scan the DOM if this is the start of a conversation
     let domContext = '';
     if (conversationHistory.length === 0) {
       appendToolStep('Dehydrating page DOM tree (Page-Agent architecture)...');
-      const domData = await scanActivePageDom();
+      const domData = await scanActivePageDom(requestTabId);
       if (domData) {
         domContext = DomDehydrator.formatForPrompt(domData);
       }
@@ -732,7 +735,7 @@
       try {
         const allScripts = await ScriptManager.getAllScripts();
         const matchingScripts = allScripts.filter(
-          (s) => s.enabled && ScriptManager.matchesUrl(activeTab?.url || '', s.matchPatterns)
+          (s) => s.enabled && ScriptManager.matchesUrl(requestTabUrl, s.matchPatterns)
         );
         if (matchingScripts.length > 0) {
           domContext += `\n\n[Active Saved Userscripts on this page]:\n` +
@@ -1074,7 +1077,7 @@ ${customInstructions ? 'User Custom Instructions: ' + customInstructions : ''}`
           let inspectResult;
           try {
             const queryRes = await chrome.scripting.executeScript({
-              target: { tabId: activeTab.id },
+              target: { tabId: requestTabId || activeTab.id },
               world: 'MAIN',
               func: (snippet) => {
                 try {
@@ -1111,7 +1114,7 @@ ${customInstructions ? 'User Custom Instructions: ' + customInstructions : ''}`
           });
         } else if (call.name === 'dehydrate_dom') {
           appendToolStep('Refreshing DOM tree summary...');
-          const domData = await scanActivePageDom();
+          const domData = await scanActivePageDom(requestTabId);
           const formatted = DomDehydrator.formatForPrompt(domData);
           functionResponses.push({
             functionResponse: {
@@ -1168,9 +1171,10 @@ ${customInstructions ? 'User Custom Instructions: ' + customInstructions : ''}`
           };
 
           let alreadyRan = false;
-          if (autoRun && activeTab && activeTab.id) {
+          const targetExecId = requestTabId || activeTab?.id;
+          if (autoRun && targetExecId) {
             appendToolStep(`Auto-running "${scriptData.name}" in page...`);
-            const execRes = await ScriptManager.executeInTab(activeTab.id, scriptData.script, scriptData.name);
+            const execRes = await ScriptManager.executeInTab(targetExecId, scriptData.script, scriptData.name);
             alreadyRan = execRes?.success || false;
           }
 
