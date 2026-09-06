@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Test Page - Userscript AI Agent</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      margin: 0;
+      padding: 0;
+      background-color: #f4f6f8;
+      color: #333;
+    }
+    header.site-header {
+      background: #2563eb;
+      color: white;
+      padding: 16px 24px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .ad-banner {
+      background: #fef08a;
+      border: 2px dashed #ca8a04;
+      padding: 18px;
+      text-align: center;
+      font-weight: bold;
+      margin: 16px 24px;
+      border-radius: 8px;
+      color: #854d0e;
+    }
+    .content-container {
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 20px;
+      background: white;
+      border-radius: 8px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    }
+    table.data-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 16px;
+    }
+    table.data-table th, table.data-table td {
+      border: 1px solid #e2e8f0;
+      padding: 10px 14px;
+      text-align: left;
+    }
+    table.data-table th {
+      background-color: #f8fafc;
+      font-weight: 600;
+    }
+    .btn {
+      background: #2563eb;
+      color: white;
+      border: none;
+      padding: 8px 16px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-weight: 500;
+    }
+    .btn:hover {
+      background: #1d4ed8;
+    }
+  </style>
+</head>
+<body>
+  <header class="site-header" id="main-header">
+    <h2>TechNews Daily</h2>
+    <nav>
+      <a href="#home" style="color: white; margin-right: 12px;">Home</a>
+      <a href="#articles" style="color: white; margin-right: 12px;">Articles</a>
+      <button class="btn" id="login-btn">Sign In</button>
+    </nav>
+  </header>
+
+  <div class="ad-banner" id="annoying-sponsor-banner">
+    ⚠️ SPONSORED: Get 90% Off Cloud Hosting Today! (Click to Dismiss)
+  </div>
+
+  <div class="content-container">
+    <h1>Top AI Trends in 2026</h1>
+    <p class="article-lead">
+      Autonomous in-page browser agents are transforming how users interact with web interfaces by manipulating the live DOM in real time.
+    </p>
+
+    <div class="table-section">
+      <div style="display: flex; justify-content: space-between; align-items: center;">
+        <h3>Performance Benchmarks</h3>
+      </div>
+      <table class="data-table" id="metrics-table">
+        <thead>
+          <tr>
+            <th>Library</th>
+            <th>Approach</th>
+            <th>Latency (ms)</th>
+            <th>Token Cost</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Alibaba Page-Agent</td>
+            <td>DOM Dehydration</td>
+            <td>120ms</td>
+            <td>Low</td>
+          </tr>
+          <tr>
+            <td>External CDP Agent</td>
+            <td>Screenshots / Vision</td>
+            <td>1450ms</td>
+            <td>High</td>
+          </tr>
+          <tr>
+            <td>Userscript AI Agent</td>
+            <td>Native Side Panel + ReAct</td>
+            <td>95ms</td>
+            <td>Minimal</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div style="margin-top: 24px;">
+      <button class="btn" id="subscribe-action">Subscribe to Newsletter</button>
+      <button class="btn" id="share-action" style="background: #64748b;">Share Article</button>
+    </div>
+  </div>
+</body>
+</html>

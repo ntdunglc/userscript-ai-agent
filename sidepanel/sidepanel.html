@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Userscript AI Agent</title>
+  <link rel="stylesheet" href="sidepanel.css">
+</head>
+<body>
+  <div class="app-container">
+    <!-- Top Header -->
+    <header class="app-header">
+      <div class="header-top">
+        <div class="brand">
+          <img src="../icons/icon32.png" alt="Logo" class="brand-icon" />
+          <span class="brand-title">Userscript Agent</span>
+        </div>
+        <div class="header-actions">
+          <label class="toggle-switch" title="When ON, generated scripts run automatically in the active tab">
+            <input type="checkbox" id="autoRunToggle" checked />
+            <span class="slider"></span>
+            <span class="toggle-label">Auto-Run</span>
+          </label>
+          <button id="optionsBtn" class="icon-btn" title="Open Settings">⚙️</button>
+        </div>
+      </div>
+
+      <!-- Active Tab Bar -->
+      <div class="active-tab-bar" id="activeTabBar">
+        <span class="tab-indicator-dot"></span>
+        <span class="tab-domain" id="activeTabDomain">Loading tab...</span>
+        <button id="refreshTabBtn" class="refresh-btn" title="Refresh tab info">↺</button>
+        <div class="quick-model-wrapper" title="Active Model (Quick switcher)">
+          <span class="model-tag-icon">⚡</span>
+          <select id="quickModelSelect" class="quick-model-select">
+            <option value="gemini-flash-latest">Flash Latest</option>
+            <option value="gemini-3.5-flash-lite">3.5 Flash-Lite</option>
+            <option value="gemini-2.5-flash-lite">2.5 Flash-Lite</option>
+            <option value="gemini-2.0-flash-lite">2.0 Flash-Lite</option>
+            <option value="gemini-3.8-flash">3.8 Flash</option>
+            <option value="gemini-2.5-flash">2.5 Flash</option>
+            <option value="gemini-2.0-flash">2.0 Flash</option>
+            <option value="gemini-1.5-flash">1.5 Flash</option>
+            <option value="gemini-1.5-pro">1.5 Pro</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Navigation Tabs -->
+      <nav class="nav-tabs">
+        <button class="nav-tab active" id="tabChat" data-view="chatView">
+          🤖 Agent Chat
+        </button>
+        <button class="nav-tab" id="tabScripts" data-view="scriptsView">
+          📜 Saved Scripts <span class="badge" id="scriptsCountBadge">0</span>
+        </button>
+      </nav>
+    </header>
+
+    <!-- Main Content Area -->
+    <main class="main-content">
+      <!-- Chat View -->
+      <section id="chatView" class="view-panel active">
+        <div id="messagesFeed" class="messages-feed">
+          <!-- Welcome Card -->
+          <div class="welcome-card" id="welcomeCard">
+            <div class="welcome-icon">⚡</div>
+            <h3>Page-Agent DOM Copilot</h3>
+            <p>Chat with the AI agent to inspect the page DOM and generate custom userscripts that modify styles, hide ads, or add features.</p>
+            <div class="suggestion-chips">
+              <button class="chip" data-prompt="Hide all ads, banners, and sponsored sections on this page">🚫 Hide Ads & Banners</button>
+              <button class="chip" data-prompt="Enable high-contrast dark mode for this page">🌙 Dark Mode Stylesheet</button>
+              <button class="chip" data-prompt="Make the top navigation header floating sticky with a blur backdrop">📌 Sticky Nav Header</button>
+              <button class="chip" data-prompt="Add a button at the top of the main table to export data as CSV">📊 Add Table CSV Export</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Chat Input Footer -->
+        <footer class="chat-footer">
+          <div class="input-toolbar">
+            <button id="pickElementBtn" class="toolbar-btn" title="Click an element on the page to inspect its selector and HTML">
+              🎯 Pick Element
+            </button>
+            <button id="captureScreenshotBtn" class="toolbar-btn" title="Capture active tab screenshot to attach to message">
+              📸 Screenshot
+            </button>
+            <button id="dehydrateDomBtn" class="toolbar-btn" title="Dehydrate the current DOM tree into a token-efficient summary">
+              🔍 Scan DOM
+            </button>
+            <button id="clearChatBtn" class="toolbar-btn text-muted" title="Clear conversation">
+              🧹 Clear
+            </button>
+          </div>
+
+          <!-- Attached Screenshot Preview -->
+          <div id="screenshotPreviewContainer" class="screenshot-preview-container hidden">
+            <img id="screenshotPreviewImg" class="screenshot-preview-thumb" alt="Screenshot" />
+            <div class="screenshot-preview-info">
+              <span class="screenshot-preview-title">Screenshot attached</span>
+              <span class="screenshot-preview-sub">Will be sent to Gemini with prompt</span>
+            </div>
+            <button id="removeScreenshotBtn" class="remove-screenshot-btn" title="Remove screenshot">&times;</button>
+          </div>
+
+          <div class="chat-input-box">
+            <textarea 
+              id="promptInput" 
+              placeholder="Ask the agent to inspect or modify this page..." 
+              rows="2"
+            ></textarea>
+            <button id="sendBtn" class="send-btn" title="Send message (Enter)">
+              ➤
+            </button>
+          </div>
+        </footer>
+      </section>
+
+      <!-- Saved Scripts Manager View (Tampermonkey style) -->
+      <section id="scriptsView" class="view-panel">
+        <div class="scripts-toolbar">
+          <input type="text" id="scriptsSearch" placeholder="Search saved scripts..." class="search-input" />
+          <div class="scripts-actions">
+            <button id="newScriptBtn" class="btn-sm btn-primary">+ New Script</button>
+            <button id="exportScriptsBtn" class="btn-sm btn-secondary" title="Export as JSON backup">📤 Export</button>
+            <button id="importScriptsBtn" class="btn-sm btn-secondary" title="Import JSON backup">📥 Import</button>
+            <input type="file" id="importFileInput" accept=".json,.js,.user.js,.txt" style="display: none;" />
+          </div>
+        </div>
+
+        <div id="scriptsList" class="scripts-list">
+          <!-- Populated by script_manager.js -->
+        </div>
+      </section>
+    </main>
+
+    <!-- Save / Edit Script Modal (Tampermonkey Single Form Editor) -->
+    <div id="scriptModal" class="modal hidden">
+      <div class="modal-backdrop" id="modalBackdrop"></div>
+      <div class="modal-dialog modal-editor-dialog">
+        <div class="modal-header">
+          <div class="modal-title-wrap">
+            <h3 id="modalTitle">Userscript Editor</h3>
+            <span class="modal-badge">Tampermonkey Format</span>
+          </div>
+          <button id="closeModalBtn" class="close-btn" title="Close modal">&times;</button>
+        </div>
+        <div class="modal-body modal-editor-body">
+          <input type="hidden" id="modalScriptId" />
+          <div class="editor-hints">
+            <span>Configure <code>@name</code>, <code>@match</code>, and <code>@description</code> directly in the header block:</span>
+          </div>
+          <div class="code-editor-wrap">
+            <textarea id="modalScriptCode" spellcheck="false" class="code-textarea userscript-editor" placeholder="// ==UserScript==&#10;// @name My Script&#10;// @match *://*/*&#10;// ==/UserScript=="></textarea>
+          </div>
+          <div class="modal-meta-bar">
+            <label class="checkbox-label">
+              <input type="checkbox" id="modalScriptEnabled" checked />
+              <span>Enable auto-run on matching pages</span>
+            </label>
+            <div id="editorMetadataPreview" class="editor-meta-preview" title="Parsed metadata preview"></div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button id="cancelModalBtn" class="btn-secondary">Cancel</button>
+          <button id="saveModalBtn" class="btn-primary">💾 Save Script</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="dom_dehydrator.js"></script>
+  <script src="script_manager.js"></script>
+  <script src="sidepanel.js"></script>
+</body>
+</html>

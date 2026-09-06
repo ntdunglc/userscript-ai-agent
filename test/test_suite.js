@@ -1,0 +1,419 @@
+// test/test_suite.js - Comprehensive test suite for Userscript AI Agent
+
+const fs = require('fs');
+const path = require('path');
+const assert = require('assert');
+
+const ROOT_DIR = path.resolve(__dirname, '..');
+
+console.log('🧪 Running Userscript AI Agent Test Suite...\n');
+
+let passed = 0;
+let failed = 0;
+
+async function test(name, fn) {
+  try {
+    await fn();
+    console.log(`  ✓ ${name}`);
+    passed++;
+  } catch (err) {
+    console.error(`  ✗ ${name}`);
+    console.error(`    ${err.message}\n`);
+    failed++;
+  }
+}
+
+async function run() {
+  // -------------------------------------------------------------
+  // Test 1: Manifest V3 Schema & Asset Verification
+  // -------------------------------------------------------------
+  console.log('1. Manifest V3 & File Integrity Tests:');
+
+  await test('manifest.json exists and is valid JSON', () => {
+    const manifestPath = path.join(ROOT_DIR, 'manifest.json');
+    assert.ok(fs.existsSync(manifestPath), 'manifest.json does not exist');
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    assert.strictEqual(manifest.manifest_version, 3, 'Must be Manifest V3');
+    assert.ok(manifest.name, 'Manifest must have a name');
+    assert.ok(manifest.version, 'Manifest must have a version');
+    assert.ok(manifest.permissions.includes('sidePanel'), 'Must request sidePanel permission');
+    assert.ok(manifest.permissions.includes('scripting'), 'Must request scripting permission');
+    assert.ok(manifest.permissions.includes('storage'), 'Must request storage permission');
+    assert.ok(manifest.permissions.includes('activeTab'), 'Must request activeTab permission');
+  });
+
+  await test('all icon assets referenced in manifest.json exist on disk', () => {
+    const manifest = JSON.parse(fs.readFileSync(path.join(ROOT_DIR, 'manifest.json'), 'utf8'));
+    const iconSizes = ['16', '32', '48', '128'];
+    for (const size of iconSizes) {
+      const iconRel = manifest.icons[size];
+      assert.ok(iconRel, `Icon ${size} is missing in manifest icons`);
+      const fullPath = path.join(ROOT_DIR, iconRel);
+      assert.ok(fs.existsSync(fullPath), `Icon file ${fullPath} does not exist`);
+      const stat = fs.statSync(fullPath);
+      assert.ok(stat.size > 0, `Icon ${fullPath} is empty`);
+    }
+  });
+
+  await test('service worker background.js exists and is valid JS', () => {
+    const bgPath = path.join(ROOT_DIR, 'background.js');
+    assert.ok(fs.existsSync(bgPath), 'background.js does not exist');
+    const code = fs.readFileSync(bgPath, 'utf8');
+    assert.ok(code.includes('chrome.sidePanel'), 'Must configure sidePanel');
+    assert.ok(code.includes('chrome.tabs.onUpdated'), 'Must listen to tabs onUpdated for auto-injection');
+  });
+
+  await test('options and sidepanel files exist with correct HTML/CSS/JS pairs', () => {
+    const files = [
+      'options/options.html',
+      'options/options.css',
+      'options/options.js',
+      'sidepanel/sidepanel.html',
+      'sidepanel/sidepanel.css',
+      'sidepanel/sidepanel.js',
+      'sidepanel/dom_dehydrator.js',
+      'sidepanel/script_manager.js'
+    ];
+    for (const f of files) {
+      const fullPath = path.join(ROOT_DIR, f);
+      assert.ok(fs.existsSync(fullPath), `Expected file ${f} does not exist`);
+    }
+  });
+
+  // -------------------------------------------------------------
+  // Test 2: URL Pattern Matcher Logic
+  // -------------------------------------------------------------
+  console.log('\n2. URL Match Pattern & Glob Tests:');
+
+  const scriptManagerCode = fs.readFileSync(path.join(ROOT_DIR, 'sidepanel/script_manager.js'), 'utf8');
+  const ScriptManagerMock = {};
+  eval(scriptManagerCode.replace('window.ScriptManager = ScriptManager;', 'Object.assign(ScriptManagerMock, ScriptManager);'));
+
+  await test('<all_urls> matches any http and https URL', () => {
+    assert.strictEqual(ScriptManagerMock.matchesUrl('https://google.com', ['<all_urls>']), true);
+    assert.strictEqual(ScriptManagerMock.matchesUrl('http://localhost:3000', ['<all_urls>']), true);
+    assert.strictEqual(ScriptManagerMock.matchesUrl('https://sub.domain.com/path?q=1', ['<all_urls>']), true);
+  });
+
+  await test('wildcard domain patterns match correctly for both apex domain and subdomains', () => {
+    const patterns = ['*://*.youtube.com/*'];
+    assert.strictEqual(ScriptManagerMock.matchesUrl('https://www.youtube.com/watch?v=abc', patterns), true);
+    assert.strictEqual(ScriptManagerMock.matchesUrl('https://m.youtube.com/', patterns), true);
+    assert.strictEqual(ScriptManagerMock.matchesUrl('https://youtube.com/feed', patterns), true);
+    assert.strictEqual(ScriptManagerMock.matchesUrl('https://vimeo.com/watch', patterns), false);
+    assert.strictEqual(ScriptManagerMock.matchesUrl('https://notyoutube.com/feed', patterns), false);
+
+    // Test apex domain like archive.ph
+    const archivePatterns = ['*://*.archive.ph/*'];
+    assert.strictEqual(ScriptManagerMock.matchesUrl('https://archive.ph/5NP50', archivePatterns), true);
+    assert.strictEqual(ScriptManagerMock.matchesUrl('https://www.archive.ph/5NP50', archivePatterns), true);
+    assert.strictEqual(ScriptManagerMock.matchesUrl('http://archive.ph/', archivePatterns), true);
+    assert.strictEqual(ScriptManagerMock.matchesUrl('https://notarchive.ph/5NP50', archivePatterns), false);
+  });
+
+  await test('multiple patterns in array evaluate with OR logic', () => {
+    const patterns = ['https://github.com/*', 'https://news.ycombinator.com/*'];
+    assert.strictEqual(ScriptManagerMock.matchesUrl('https://github.com/alibaba/page-agent', patterns), true);
+    assert.strictEqual(ScriptManagerMock.matchesUrl('https://news.ycombinator.com/item?id=1', patterns), true);
+    assert.strictEqual(ScriptManagerMock.matchesUrl('https://reddit.com/r/javascript', patterns), false);
+  });
+
+  // -------------------------------------------------------------
+  // Test 3: Script Manager Backup Serialization & Tampermonkey Compatibility
+  // -------------------------------------------------------------
+  console.log('\n3. Script Manager Backup & Compatibility Tests:');
+
+  let memoryStorage = {};
+  global.chrome = {
+    storage: {
+      local: {
+        get: (keys, cb) => {
+          const res = {};
+          if (typeof keys === 'string') {
+            res[keys] = memoryStorage[keys];
+          } else if (Array.isArray(keys)) {
+            keys.forEach(k => res[k] = memoryStorage[k]);
+          } else if (typeof keys === 'object' && keys !== null) {
+            Object.keys(keys).forEach(k => res[k] = memoryStorage[k] !== undefined ? memoryStorage[k] : keys[k]);
+          } else {
+            res.saved_userscripts = memoryStorage.saved_userscripts || [];
+          }
+          if (cb) cb(res);
+          return Promise.resolve(res);
+        },
+        set: (obj, cb) => {
+          Object.assign(memoryStorage, obj);
+          if (cb) cb();
+          return Promise.resolve();
+        }
+      }
+    }
+  };
+
+  await test('ScriptManager can save, retrieve, and toggle userscripts', async () => {
+    memoryStorage = {};
+    const saved = await ScriptManagerMock.saveScript({
+      name: 'Ad Blocker Test',
+      matchPatterns: ['*://*.example.com/*'],
+      code: 'document.querySelector(".ad").remove();',
+      enabled: true
+    });
+
+    assert.ok(saved.id, 'Must generate script ID');
+    assert.strictEqual(saved.name, 'Ad Blocker Test');
+
+    const all = await ScriptManagerMock.getAllScripts();
+    assert.strictEqual(all.length, 1);
+    assert.strictEqual(all[0].name, 'Ad Blocker Test');
+
+    // Toggle
+    await ScriptManagerMock.toggleScript(saved.id, false);
+    const updated = await ScriptManagerMock.getAllScripts();
+    assert.strictEqual(updated[0].enabled, false);
+  });
+
+  await test('ScriptManager can export and import JSON backup files', async () => {
+    const jsonExport = await ScriptManagerMock.exportScripts();
+    assert.ok(typeof jsonExport === 'string', 'Export must return JSON string');
+    const parsed = JSON.parse(jsonExport);
+    assert.ok(Array.isArray(parsed.scripts), 'Exported payload must have scripts array');
+    assert.strictEqual(parsed.scripts.length, 1);
+
+    // Clear and re-import
+    memoryStorage = {};
+    const importRes = await ScriptManagerMock.importScripts(jsonExport);
+    assert.strictEqual(importRes.success, true);
+    assert.strictEqual(importRes.count, 1);
+
+    const restored = await ScriptManagerMock.getAllScripts();
+    assert.strictEqual(restored.length, 1);
+    assert.strictEqual(restored[0].name, 'Ad Blocker Test');
+  });
+
+  await test('ScriptManager parses Tampermonkey // ==UserScript== metadata block correctly', () => {
+    const rawUserScript = `// ==UserScript==
+// @name         Archive.today Fix & Clean
+// @namespace    http://tampermonkey.net/
+// @version      2026.09.06
+// @description  Hides header banner and restores normal layout
+// @author       PowerUser
+// @match        *://*.archive.ph/*
+// @match        *://*.archive.today/*
+// @include      https://archive.is/*
+// @run-at       document-end
+// @grant        none
+// ==/UserScript==
+
+(function() {
+  console.log("Running...");
+})();`;
+
+    const meta = ScriptManagerMock.parseMetadata(rawUserScript);
+    assert.strictEqual(meta.name, 'Archive.today Fix & Clean');
+    assert.strictEqual(meta.description, 'Hides header banner and restores normal layout');
+    assert.strictEqual(meta.version, '2026.09.06');
+    assert.strictEqual(meta.author, 'PowerUser');
+    assert.strictEqual(meta.runAt, 'document_end');
+    assert.strictEqual(meta.matchPatterns.length, 3);
+    assert.ok(meta.matchPatterns.includes('*://*.archive.ph/*'));
+    assert.ok(meta.matchPatterns.includes('*://*.archive.today/*'));
+    assert.ok(meta.matchPatterns.includes('https://archive.is/*'));
+  });
+
+  await test('ScriptManager formats scripts to Tampermonkey format with match patterns', () => {
+    const script = {
+      name: 'HN Dark Mode',
+      description: 'Make Hacker News dark',
+      matchPatterns: ['https://news.ycombinator.com/*'],
+      code: 'document.body.style.background = "#121212";'
+    };
+
+    const formatted = ScriptManagerMock.formatAsUserScript(script, '<all_urls>');
+    assert.ok(formatted.includes('// ==UserScript=='));
+    assert.ok(formatted.includes('// ==/UserScript=='));
+    assert.ok(formatted.includes('// @name         HN Dark Mode'));
+    assert.ok(formatted.includes('// @match        https://news.ycombinator.com/*'));
+    assert.ok(formatted.includes('document.body.style.background = "#121212";'));
+
+    // Formatting an already formatted script should return it untouched
+    const untouched = ScriptManagerMock.formatAsUserScript({ code: formatted });
+    assert.strictEqual(untouched, formatted);
+  });
+
+  await test('ScriptManager auto-extracts metadata when saving raw userscript code', async () => {
+    memoryStorage = {};
+    const fullCode = `// ==UserScript==
+// @name         Economist Paywall Reader
+// @description  Bypasses overlay
+// @match        *://*.economist.com/*
+// @run-at       document-idle
+// ==/UserScript==
+
+document.querySelector('.paywall')?.remove();`;
+
+    const saved = await ScriptManagerMock.saveScript({
+      code: fullCode,
+      enabled: true
+    });
+
+    assert.strictEqual(saved.name, 'Economist Paywall Reader');
+    assert.strictEqual(saved.description, 'Bypasses overlay');
+    assert.deepStrictEqual(saved.matchPatterns, ['*://*.economist.com/*']);
+    assert.strictEqual(saved.runAt, 'document_idle');
+  });
+
+  await test('ScriptManager imports raw .user.js files directly into database', async () => {
+    memoryStorage = {};
+    const rawUserJs = `// ==UserScript==
+// @name         Direct UserJS Import
+// @description  Test raw file import
+// @match        *://*.github.com/*
+// ==/UserScript==
+console.log("imported directly!");`;
+
+    const importRes = await ScriptManagerMock.importScripts(rawUserJs);
+    assert.strictEqual(importRes.success, true);
+    assert.strictEqual(importRes.count, 1);
+
+    const all = await ScriptManagerMock.getAllScripts();
+    assert.strictEqual(all.length, 1);
+    assert.strictEqual(all[0].name, 'Direct UserJS Import');
+    assert.deepStrictEqual(all[0].matchPatterns, ['*://*.github.com/*']);
+  });
+
+  // -------------------------------------------------------------
+  // Test 4: DOM Dehydration Engine Logic
+  // -------------------------------------------------------------
+  console.log('\n4. Page-Agent DOM Dehydration Tests:');
+
+  const domDehydratorCode = fs.readFileSync(path.join(ROOT_DIR, 'sidepanel/dom_dehydrator.js'), 'utf8');
+  const DomDehydratorMock = {};
+  eval(domDehydratorCode.replace('window.DomDehydrator = DomDehydrator;', 'Object.assign(DomDehydratorMock, DomDehydrator);'));
+
+  await test('DomDehydrator provides an executable injection script', () => {
+    const script = DomDehydratorMock.getInjectionScript();
+    assert.ok(typeof script === 'string', 'Must return string');
+    assert.ok(script.includes('TreeWalker'), 'Must use efficient DOM TreeWalker');
+    assert.ok(script.includes('isVisible'), 'Must filter invisible elements');
+  });
+
+  await test('DomDehydrator.scanPage serializes to valid function expression for executeScript', () => {
+    const fnStr = DomDehydratorMock.scanPage.toString().trim();
+    assert.ok(fnStr.startsWith('function'), 'scanPage must start with "function" to avoid syntax error when wrapped in (...)()');
+    assert.doesNotThrow(() => {
+      eval('(' + fnStr + ')');
+    }, 'Must evaluate without SyntaxError: Unexpected token {');
+  });
+
+  await test('DomDehydrator formatForPrompt produces structured markdown table', () => {
+    const mockDehydrated = {
+      title: 'Test Article',
+      url: 'https://example.com/page',
+      elementCount: 2,
+      elements: [
+        {
+          tag: 'button',
+          selector: '#submit-btn',
+          id: 'submit-btn',
+          classes: 'btn primary',
+          text: 'Submit Application',
+          isInteractive: true,
+          isHeading: false,
+          isAd: false
+        },
+        {
+          tag: 'div',
+          selector: '#sponsor-banner',
+          id: 'sponsor-banner',
+          classes: 'banner-ad',
+          text: 'Advertisement',
+          isInteractive: false,
+          isHeading: false,
+          isAd: true
+        }
+      ]
+    };
+
+    const md = DomDehydratorMock.formatForPrompt(mockDehydrated);
+    assert.ok(md.includes('## Page: "Test Article"'), 'Markdown contains page title');
+    assert.ok(md.includes('#submit-btn'), 'Markdown contains selector');
+    assert.ok(md.includes('potential-ad/banner'), 'Markdown highlights ad classification');
+  });
+
+  // -------------------------------------------------------------
+  // Test 5: Gemini API Protocol & Role Schema Validation
+  // -------------------------------------------------------------
+  console.log('\n5. Gemini API Schema & Role Validation:');
+
+  const sidepanelCode = fs.readFileSync(path.join(ROOT_DIR, 'sidepanel/sidepanel.js'), 'utf8');
+
+  await test('sidepanel.js does not use disallowed role: "function"', () => {
+    assert.strictEqual(sidepanelCode.includes("role: 'function'"), false, 'Must not use role "function"');
+    assert.strictEqual(sidepanelCode.includes('role: "function"'), false, 'Must not use role "function"');
+  });
+
+  await test('sidepanel.js adheres to Gemini REST functionResponse format', () => {
+    assert.ok(sidepanelCode.includes('functionResponse:'), 'Must format tool results as functionResponse');
+    assert.ok(sidepanelCode.includes("role: 'user'"), 'Must send functionResponse with role "user"');
+  });
+
+  // -------------------------------------------------------------
+  // Test 6: Multimodal Screenshot & Visual Inspection Tests
+  // -------------------------------------------------------------
+  console.log('\n6. Multimodal Screenshot & Visual Inspection Tests:');
+
+  const sidepanelHtml = fs.readFileSync(path.join(ROOT_DIR, 'sidepanel/sidepanel.html'), 'utf8');
+  const sidepanelCss = fs.readFileSync(path.join(ROOT_DIR, 'sidepanel/sidepanel.css'), 'utf8');
+
+  await test('sidepanel.html includes screenshot toolbar button and preview container', () => {
+    assert.ok(sidepanelHtml.includes('id="captureScreenshotBtn"'), 'Must have captureScreenshotBtn');
+    assert.ok(sidepanelHtml.includes('id="screenshotPreviewContainer"'), 'Must have screenshotPreviewContainer');
+    assert.ok(sidepanelHtml.includes('id="screenshotPreviewImg"'), 'Must have screenshotPreviewImg');
+    assert.ok(sidepanelHtml.includes('id="removeScreenshotBtn"'), 'Must have removeScreenshotBtn');
+  });
+
+  await test('sidepanel.css defines styles for screenshot preview and thumbnail displays', () => {
+    assert.ok(sidepanelCss.includes('.screenshot-preview-container'), 'Must style .screenshot-preview-container');
+    assert.ok(sidepanelCss.includes('.screenshot-preview-thumb'), 'Must style .screenshot-preview-thumb');
+    assert.ok(sidepanelCss.includes('.chat-screenshot-thumb'), 'Must style .chat-screenshot-thumb');
+    assert.ok(sidepanelCss.includes('.tool-step-screenshot'), 'Must style .tool-step-screenshot');
+  });
+
+  await test('sidepanel.js declares capture_screenshot tool in function_declarations and systemInstruction', () => {
+    assert.ok(sidepanelCode.includes("name: 'capture_screenshot'"), 'Tools array must declare capture_screenshot');
+    assert.ok(sidepanelCode.includes('capture_screenshot:'), 'System instruction must explain capture_screenshot');
+  });
+
+  await test('sidepanel.js handles capture_screenshot tool and formats multimodal inlineData', () => {
+    assert.ok(sidepanelCode.includes("call.name === 'capture_screenshot'"), 'Must dispatch capture_screenshot call');
+    assert.ok(sidepanelCode.includes("mimeType: 'image/jpeg'"), 'Must specify image/jpeg mimeType');
+    assert.ok(sidepanelCode.includes('inlineData:'), 'Must format screenshot data as inlineData');
+  });
+
+  await test('sidepanel.js provides autonomous screenshot perception without user button interaction', () => {
+    assert.ok(sidepanelCode.includes('visualKeywords'), 'Must define visualKeywords for automatic visual perception');
+    assert.ok(sidepanelCode.includes('config.autoScreenshot'), 'Must respect autoScreenshot configuration');
+    assert.ok(sidepanelCode.includes('Agent auto-capturing tab screenshot'), 'Must log auto-capture tool step');
+  });
+
+  const optionsHtml = fs.readFileSync(path.join(ROOT_DIR, 'options/options.html'), 'utf8');
+  const optionsJs = fs.readFileSync(path.join(ROOT_DIR, 'options/options.js'), 'utf8');
+
+  await test('options page provides autoScreenshot toggle configuration', () => {
+    assert.ok(optionsHtml.includes('id="autoScreenshotCheckbox"'), 'options.html must have autoScreenshotCheckbox');
+    assert.ok(optionsJs.includes('autoScreenshot:'), 'options.js must save/restore autoScreenshot');
+  });
+
+  console.log(`\n========================================`);
+  console.log(`Test Results: ${passed} passed, ${failed} failed`);
+  console.log(`========================================\n`);
+
+  if (failed > 0) {
+    process.exit(1);
+  }
+}
+
+run().catch((err) => {
+  console.error('Fatal test error:', err);
+  process.exit(1);
+});
