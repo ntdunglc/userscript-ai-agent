@@ -578,10 +578,35 @@ console.log("imported directly!");`;
     const toolMsg = res.compacted[2];
     assert.strictEqual(toolMsg.parts[0].functionResponse.response.inlineData, undefined, 'Tool screenshot must have inlineData pruned');
     assert.strictEqual(toolMsg.parts[0].functionResponse.response.status, 'pruned');
+    assert.strictEqual(toolMsg.parts[0].functionResponse.parts, undefined, 'functionResponse must never have parts array with text');
 
     // Verify most recent screenshot was retained in full fidelity
     const latestUserMsg = res.compacted[3];
     assert.ok(latestUserMsg.parts.some(p => p.inlineData && p.inlineData.data === 'THIRD_BASE64_IMAGE_DATA_MOST_RECENT'), 'Most recent screenshot must be preserved');
+  });
+
+  await test('ContextCompactor ensures no functionResponse has parts array with text (Gemini 400 schema fix)', () => {
+    const SidepanelModule = require('../sidepanel/sidepanel.js');
+    const compactor = SidepanelModule.ContextCompactor;
+
+    const mockHistory = [
+      {
+        role: 'user',
+        parts: [
+          {
+            functionResponse: {
+              name: 'capture_screenshot',
+              response: { status: 'pruned' },
+              parts: [{ text: 'invalid text inside functionResponse.parts' }]
+            }
+          }
+        ]
+      }
+    ];
+
+    const res = compactor.compact(mockHistory);
+    const part = res.compacted[0].parts[0];
+    assert.strictEqual(part.functionResponse.parts, undefined, 'Must delete functionResponse.parts containing text');
   });
 
   await test('ContextCompactor deduplicates older DOM tree snapshots', () => {

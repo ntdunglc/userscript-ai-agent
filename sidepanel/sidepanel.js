@@ -177,17 +177,26 @@
           // Case B: capture_screenshot tool response
           if (part.functionResponse && part.functionResponse.name === 'capture_screenshot') {
             const resp = part.functionResponse.response;
-            if (resp && resp.inlineData) {
+            const hasImage = (resp && resp.inlineData) || (part.functionResponse.parts && part.functionResponse.parts.some(p => p && p.inlineData));
+            if (hasImage) {
               imagesSeen++;
               if (imagesSeen > maxRecentImages) {
-                delete resp.inlineData;
-                resp.status = 'pruned';
-                resp.message = '[Historical screenshot pruned to optimize context tokens]';
-                if (part.functionResponse.parts) {
-                  part.functionResponse.parts = [{ text: '[Historical screenshot pruned to optimize context tokens]' }];
+                if (resp) {
+                  delete resp.inlineData;
+                  resp.status = 'pruned';
+                  resp.message = '[Historical screenshot pruned to optimize context tokens]';
                 }
+                delete part.functionResponse.parts;
                 prunedImages++;
               }
+            }
+          }
+
+          // Safety check: functionResponse.parts only supports binary inlineData in Gemini API; remove any invalid text parts
+          if (part.functionResponse && part.functionResponse.parts) {
+            part.functionResponse.parts = part.functionResponse.parts.filter(p => p && p.inlineData);
+            if (part.functionResponse.parts.length === 0) {
+              delete part.functionResponse.parts;
             }
           }
         }
