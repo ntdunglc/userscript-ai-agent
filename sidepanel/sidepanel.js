@@ -2,6 +2,7 @@
 
 (function () {
   let activeTab = null;
+  let currentTabId = null;
   let autoRun = true;
   let conversationHistory = [];
   let messageQueue = [];
@@ -17,7 +18,7 @@
   const tabChat = document.getElementById('tabChat');
 
   function setQuickModelUI(model) {
-    if (!quickModelSelect) return;
+    if (!quickModelSelect || !quickModelSelect.options) return;
     let found = false;
     for (let i = 0; i < quickModelSelect.options.length; i++) {
       if (quickModelSelect.options[i].value === model) {
@@ -70,6 +71,249 @@
   const modalScriptCode = document.getElementById('modalScriptCode');
   const modalScriptEnabled = document.getElementById('modalScriptEnabled');
   const editorMetadataPreview = document.getElementById('editorMetadataPreview');
+
+  // -------------------------------------------------------------
+  // Per-Tab Chat Session Manager
+  // -------------------------------------------------------------
+
+  const TabSessionManager = {
+    getStorage() {
+      if (typeof chrome !== 'undefined' && chrome.storage) {
+        if (chrome.storage.session) return chrome.storage.session;
+        if (chrome.storage.local) return chrome.storage.local;
+      }
+      return null;
+    },
+
+    async saveSession(tabId, sessionData) {
+      if (!tabId) return false;
+      const storage = this.getStorage();
+      if (!storage) return false;
+      const key = `tab_session_${tabId}`;
+      try {
+        await storage.set({ [key]: sessionData });
+        return true;
+      } catch (err) {
+        console.warn(`[Userscript AI Agent] Failed to save session for tab ${tabId}:`, err);
+        return false;
+      }
+    },
+
+    async loadSession(tabId) {
+      if (!tabId) return null;
+      const storage = this.getStorage();
+      if (!storage) return null;
+      const key = `tab_session_${tabId}`;
+      try {
+        const data = await storage.get(key);
+        return data ? (data[key] || null) : null;
+      } catch (err) {
+        console.warn(`[Userscript AI Agent] Failed to load session for tab ${tabId}:`, err);
+        return null;
+      }
+    },
+
+    async clearSession(tabId) {
+      if (!tabId) return false;
+      const storage = this.getStorage();
+      if (!storage) return false;
+      const key = `tab_session_${tabId}`;
+      try {
+        await storage.remove(key);
+        return true;
+      } catch (err) {
+        console.warn(`[Userscript AI Agent] Failed to clear session for tab ${tabId}:`, err);
+        return false;
+      }
+    }
+  };
+
+  async function saveTabSession(tabId) {
+    const id = tabId || currentTabId;
+    if (!id) return;
+    await TabSessionManager.saveSession(id, {
+      conversationHistory: conversationHistory || [],
+      messageQueue: messageQueue || [],
+      feedHtml: messagesFeed ? messagesFeed.innerHTML : '',
+      url: activeTab?.url || '',
+      domain: activeTabDomain ? activeTabDomain.textContent : '',
+      timestamp: Date.now()
+    });
+  }
+
+  async function loadTabSession(tabId) {
+    if (!tabId) return;
+    const session = await TabSessionManager.loadSession(tabId);
+    if (session && session.feedHtml && session.conversationHistory) {
+      conversationHistory = session.conversationHistory || [];
+      messageQueue = session.messageQueue || [];
+      if (messagesFeed) {
+        messagesFeed.innerHTML = session.feedHtml;
+        reattachFeedListeners();
+        scrollToBottom();
+      }
+    } else {
+      resetConversationFeed();
+    }
+  }
+
+  async function appendToTabSession(tabId, htmlChunk, historyEntry = null) {
+    if (!tabId) return;
+    const storage = TabSessionManager.getStorage();
+    if (!storage) return;
+    const key = `tab_session_${tabId}`;
+    try {
+      const data = await storage.get(key);
+      const session = (data && data[key]) || {
+        conversationHistory: [],
+        messageQueue: [],
+        feedHtml: '',
+        timestamp: Date.now()
+      };
+      if (htmlChunk) {
+        session.feedHtml = (session.feedHtml || '') + htmlChunk;
+      }
+      if (historyEntry) {
+        session.conversationHistory = session.conversationHistory || [];
+        session.conversationHistory.push(historyEntry);
+      }
+      session.timestamp = Date.now();
+      await storage.set({ [key]: session });
+    } catch (err) {
+      console.warn(`Failed to update background tab session ${tabId}:`, err);
+    }
+  }
+
+  function resetConversationFeed() {
+    conversationHistory = [];
+    messageQueue = [];
+    if (messagesFeed) {
+      messagesFeed.innerHTML = `
+        <div class="welcome-card" id="welcomeCard">
+          <div class="welcome-icon">⚡</div>
+          <h3>Page-Agent DOM Copilot</h3>
+          <p>Chat with the AI agent to inspect the page DOM and generate custom userscripts that modify styles, hide ads, or add features.</p>
+          <div class="suggestion-chips">
+            <button class="chip" data-prompt="Hide all ads, banners, and sponsored sections on this page">🚫 Hide Ads & Banners</button>
+            <button class="chip" data-prompt="Enable high-contrast dark mode for this page">🌙 Dark Mode Stylesheet</button>
+            <button class="chip" data-prompt="Make the top navigation header floating sticky with a blur backdrop">📌 Sticky Nav Header</button>
+            <button class="chip" data-prompt="Add a button at the top of the main table to export data as CSV">📊 Add Table CSV Export</button>
+          </div>
+        </div>
+      `;
+      reattachFeedListeners();
+    }
+  }
+
+  function reattachFeedListeners() {
+    if (!messagesFeed) return;
+
+    // Suggestion chips
+    messagesFeed.querySelectorAll('.chip').forEach((chip) => {
+      chip.onclick = () => {
+        promptInput.value = chip.getAttribute('data-prompt');
+        handleSend();
+      };
+    });
+
+    // Chat screenshot thumbnails
+    messagesFeed.querySelectorAll('.chat-screenshot-thumb').forEach((img) => {
+      img.onclick = () => {
+        window.open(img.src, '_blank');
+      };
+    });
+
+    // Tool step screenshot thumbnails
+    messagesFeed.querySelectorAll('.tool-screenshot-thumb').forEach((img) => {
+      img.onclick = () => {
+        window.open(img.src, '_blank');
+      };
+    });
+
+    // Settings button inside chat message bubble
+    const settingsBtn = messagesFeed.querySelector('#openSettingsFromChatBtn');
+    if (settingsBtn) {
+      settingsBtn.onclick = () => {
+        if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.openOptionsPage) {
+          chrome.runtime.openOptionsPage();
+        } else {
+          window.open('../options/options.html', '_blank');
+        }
+      };
+    }
+
+    // Script Cards
+    messagesFeed.querySelectorAll('.script-card').forEach((card) => {
+      const scriptCode = card.dataset.script || (card.querySelector('pre code')?.textContent || '');
+      const scriptName = card.dataset.name || (card.querySelector('.script-card-title')?.textContent || 'Userscript');
+      const cardId = card.dataset.id || card.id.replace(/^card_/, '');
+
+      const runBtn = card.querySelector(`[id^="runBtn_"]`);
+      const saveBtn = card.querySelector(`[id^="saveBtn_"]`);
+      const copyBtn = card.querySelector(`[id^="copyBtn_"]`);
+      const undoBtn = card.querySelector(`[id^="undoBtn_"]`);
+      const badge = card.querySelector(`[id^="badge_"]`);
+
+      if (runBtn) {
+        runBtn.onclick = async () => {
+          runBtn.disabled = true;
+          runBtn.textContent = 'Running...';
+          const targetId = activeTab?.id || currentTabId;
+          const res = await ScriptManager.executeInTab(targetId, scriptCode, scriptName);
+          runBtn.disabled = false;
+          runBtn.textContent = '▶ Re-run';
+          if (res && res.success) {
+            if (badge) {
+              badge.className = 'status-badge executed';
+              badge.textContent = '⚡ Executed in page';
+            }
+          } else {
+            if (badge) {
+              badge.className = 'status-badge pending';
+              badge.textContent = `⚠️ Error: ${res ? res.error : 'Execution failed'}`;
+            }
+          }
+          if (currentTabId) saveTabSession(currentTabId);
+        };
+      }
+
+      if (saveBtn) {
+        saveBtn.onclick = () => {
+          let defaultPattern = '<all_urls>';
+          if (activeTab && activeTab.url) {
+            try {
+              const urlObj = new URL(activeTab.url);
+              defaultPattern = `*://*.${urlObj.hostname.replace(/^www\./, '')}/*`;
+            } catch (e) {}
+          }
+          openScriptModal({
+            name: scriptName || 'AI Generated Script',
+            matchPatterns: [defaultPattern],
+            code: scriptCode || '',
+            enabled: true
+          });
+        };
+      }
+
+      if (copyBtn) {
+        copyBtn.onclick = () => {
+          navigator.clipboard.writeText(scriptCode);
+          copyBtn.textContent = '✓ Copied!';
+          setTimeout(() => (copyBtn.textContent = '📋 Copy'), 2000);
+        };
+      }
+
+      if (undoBtn) {
+        undoBtn.onclick = async () => {
+          const targetId = activeTab?.id || currentTabId;
+          if (targetId) {
+            await chrome.tabs.reload(targetId);
+            appendToolStep('Reloaded active tab to revert DOM modifications.');
+          }
+        };
+      }
+    });
+  }
 
   // -------------------------------------------------------------
   // Initialization & Tab Handling
@@ -153,15 +397,15 @@
 
     // Listen to tab changes in browser
     if (chrome.tabs && chrome.tabs.onActivated) {
-      chrome.tabs.onActivated.addListener(async () => {
-        await updateActiveTab();
-        await loadSavedScriptsList();
+      chrome.tabs.onActivated.addListener(async (activeInfo) => {
+        await handleTabSwitch(activeInfo.tabId);
       });
     }
     if (chrome.tabs && chrome.tabs.onUpdated) {
       chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
-        if (changeInfo.status === 'complete' || changeInfo.url) {
-          await updateActiveTab();
+        if (tabId === currentTabId && (changeInfo.status === 'complete' || changeInfo.url)) {
+          await updateActiveTabInfo();
+          await loadSavedScriptsList();
         }
       });
     }
@@ -190,8 +434,41 @@
       });
     }
 
-    // Run async tab detection and script list loading
-    await updateActiveTab();
+    // Parse query params for ?tabId=
+    let queryTabId = null;
+    try {
+      if (typeof window !== 'undefined' && window.location) {
+        const urlParams = new URLSearchParams(window.location.search);
+        if (urlParams.has('tabId')) {
+          queryTabId = parseInt(urlParams.get('tabId'), 10);
+        }
+      }
+    } catch (e) {}
+
+    if (queryTabId) {
+      currentTabId = queryTabId;
+      try {
+        if (chrome.tabs && chrome.tabs.get) {
+          activeTab = await chrome.tabs.get(queryTabId);
+          updateTabDomainUI(activeTab);
+        } else {
+          await updateActiveTabInfo();
+        }
+      } catch (e) {
+        await updateActiveTabInfo();
+      }
+    } else {
+      await updateActiveTabInfo();
+      if (activeTab && activeTab.id) {
+        currentTabId = activeTab.id;
+      }
+    }
+
+    if (currentTabId) {
+      await loadTabSession(currentTabId);
+    } else {
+      resetConversationFeed();
+    }
     await loadSavedScriptsList();
   }
 
@@ -210,7 +487,58 @@
     }
   }
 
+  function updateTabDomainUI(tab) {
+    if (!activeTabDomain) return;
+    if (tab && tab.url) {
+      try {
+        const urlObj = new URL(tab.url);
+        activeTabDomain.textContent = urlObj.hostname || tab.url;
+      } catch (e) {
+        activeTabDomain.textContent = tab.url;
+      }
+    } else if (tab) {
+      activeTabDomain.textContent = tab.title || 'Active Tab';
+    } else {
+      activeTabDomain.textContent = 'No active tab';
+    }
+  }
+
+  async function handleTabSwitch(newTabId) {
+    if (!newTabId || newTabId === currentTabId) return;
+
+    // Save outgoing tab session
+    if (currentTabId) {
+      await saveTabSession(currentTabId);
+    }
+
+    currentTabId = newTabId;
+
+    // Update activeTab reference
+    try {
+      if (chrome.tabs && chrome.tabs.get) {
+        activeTab = await chrome.tabs.get(newTabId);
+      } else {
+        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        activeTab = tab;
+      }
+      updateTabDomainUI(activeTab);
+    } catch (err) {
+      console.warn('Failed to get tab info during switch:', err);
+    }
+
+    // Load incoming tab session
+    await loadTabSession(currentTabId);
+    await loadSavedScriptsList();
+  }
+
   async function updateActiveTab() {
+    await updateActiveTabInfo();
+    if (activeTab && activeTab.id && activeTab.id !== currentTabId) {
+      await handleTabSwitch(activeTab.id);
+    }
+  }
+
+  async function updateActiveTabInfo() {
     try {
       // In Side Panel, query active tab in last focused window first, then fallback
       let [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
@@ -222,23 +550,14 @@
         tab = tabs && tabs.length > 0 ? tabs[0] : null;
       }
 
-      if (tab && tab.url) {
-        activeTab = tab;
-        try {
-          const urlObj = new URL(tab.url);
-          activeTabDomain.textContent = urlObj.hostname || tab.url;
-        } catch (e) {
-          activeTabDomain.textContent = tab.url;
-        }
-      } else if (tab) {
-        activeTab = tab;
-        activeTabDomain.textContent = tab.title || 'Active Tab';
-      } else {
-        activeTabDomain.textContent = 'No active tab';
+      activeTab = tab;
+      updateTabDomainUI(activeTab);
+      if (tab && tab.id && !currentTabId) {
+        currentTabId = tab.id;
       }
     } catch (err) {
       console.warn('Failed to get active tab:', err);
-      activeTabDomain.textContent = 'Active Tab';
+      if (activeTabDomain) activeTabDomain.textContent = 'Active Tab';
     }
   }
 
@@ -453,162 +772,231 @@
   // Chat Messages & Gemini Tool Loop
   // -------------------------------------------------------------
 
-  function appendUserMessage(text, screenshotDataUrl = null) {
+  function appendUserMessage(text, screenshotDataUrl = null, targetTabId = null) {
+    const targetId = targetTabId || currentTabId;
     const welcomeCard = document.getElementById('welcomeCard');
     if (welcomeCard) welcomeCard.style.display = 'none';
 
-    const row = document.createElement('div');
-    row.className = 'message-row user';
-    let inner = `<div class="bubble"><div class="bubble-text">${escapeHtml(text)}</div>`;
-    if (screenshotDataUrl) {
-      inner += `
-        <div class="chat-screenshot-wrap">
-          <img src="${screenshotDataUrl}" class="chat-screenshot-thumb" alt="Attached screenshot" title="Click to view full image" />
-        </div>`;
-    }
-    inner += `</div>`;
-    row.innerHTML = inner;
-    messagesFeed.appendChild(row);
-    scrollToBottom();
-
-    if (screenshotDataUrl) {
-      const img = row.querySelector('.chat-screenshot-thumb');
-      if (img) {
-        img.addEventListener('click', () => {
-          window.open(screenshotDataUrl, '_blank');
-        });
+    if (!targetId || targetId === currentTabId) {
+      const row = document.createElement('div');
+      row.className = 'message-row user';
+      let inner = `<div class="bubble"><div class="bubble-text">${escapeHtml(text)}</div>`;
+      if (screenshotDataUrl) {
+        inner += `
+          <div class="chat-screenshot-wrap">
+            <img src="${screenshotDataUrl}" class="chat-screenshot-thumb" alt="Attached screenshot" title="Click to view full image" />
+          </div>`;
       }
+      inner += `</div>`;
+      row.innerHTML = inner;
+      messagesFeed.appendChild(row);
+      scrollToBottom();
+
+      if (screenshotDataUrl) {
+        const img = row.querySelector('.chat-screenshot-thumb');
+        if (img) {
+          img.addEventListener('click', () => {
+            window.open(screenshotDataUrl, '_blank');
+          });
+        }
+      }
+      if (currentTabId) saveTabSession(currentTabId);
+    } else {
+      let chunk = `<div class="message-row user"><div class="bubble"><div class="bubble-text">${escapeHtml(text)}</div>`;
+      if (screenshotDataUrl) {
+        chunk += `<div class="chat-screenshot-wrap"><img src="${screenshotDataUrl}" class="chat-screenshot-thumb" alt="Attached screenshot" /></div>`;
+      }
+      chunk += `</div></div>`;
+      appendToTabSession(targetId, chunk);
     }
   }
 
-  function appendAssistantMessage(text) {
-    const row = document.createElement('div');
-    row.className = 'message-row assistant';
-    row.innerHTML = `<div class="bubble">${formatMarkdown(text)}</div>`;
-    messagesFeed.appendChild(row);
-    scrollToBottom();
+  function appendAssistantMessage(text, targetTabId = null) {
+    const targetId = targetTabId || currentTabId;
+    const formatted = formatMarkdown(text);
+    if (!targetId || targetId === currentTabId) {
+      const row = document.createElement('div');
+      row.className = 'message-row assistant';
+      row.innerHTML = `<div class="bubble">${formatted}</div>`;
+      messagesFeed.appendChild(row);
+      scrollToBottom();
+      if (currentTabId) saveTabSession(currentTabId);
+    } else {
+      const chunk = `<div class="message-row assistant"><div class="bubble">${formatted}</div></div>`;
+      appendToTabSession(targetId, chunk);
+    }
   }
 
-  function appendToolStep(text) {
-    const chip = document.createElement('div');
-    chip.className = 'tool-step-chip';
-    chip.innerHTML = `<span>⚙️</span> <span>${escapeHtml(text)}</span>`;
-    messagesFeed.appendChild(chip);
-    scrollToBottom();
+  function appendToolStep(text, targetTabId = null) {
+    const targetId = targetTabId || currentTabId;
+    if (!targetId || targetId === currentTabId) {
+      const chip = document.createElement('div');
+      chip.className = 'tool-step-chip';
+      chip.innerHTML = `<span>⚙️</span> <span>${escapeHtml(text)}</span>`;
+      messagesFeed.appendChild(chip);
+      scrollToBottom();
+      if (currentTabId) saveTabSession(currentTabId);
+    } else {
+      const chunk = `<div class="tool-step-chip"><span>⚙️</span> <span>${escapeHtml(text)}</span></div>`;
+      appendToTabSession(targetId, chunk);
+    }
   }
 
-  function appendScreenshotToolStep(reason, dataUrl) {
-    const chip = document.createElement('div');
-    chip.className = 'tool-step-chip tool-step-screenshot';
-    chip.innerHTML = `
+  function appendScreenshotToolStep(reason, dataUrl, targetTabId = null) {
+    const targetId = targetTabId || currentTabId;
+    const innerHtml = `
       <div style="display:flex;align-items:center;gap:5px;">
         <span>📸</span>
         <span><strong>Captured page screenshot</strong>${reason ? ': ' + escapeHtml(reason) : ''}</span>
       </div>
       <img src="${dataUrl}" class="tool-screenshot-thumb" alt="Captured page screenshot" title="Click to view full image" />
     `;
-    messagesFeed.appendChild(chip);
-    scrollToBottom();
+    if (!targetId || targetId === currentTabId) {
+      const chip = document.createElement('div');
+      chip.className = 'tool-step-chip tool-step-screenshot';
+      chip.innerHTML = innerHtml;
+      messagesFeed.appendChild(chip);
+      scrollToBottom();
 
-    const img = chip.querySelector('.tool-screenshot-thumb');
-    if (img) {
-      img.addEventListener('click', () => {
-        window.open(dataUrl, '_blank');
-      });
+      const img = chip.querySelector('.tool-screenshot-thumb');
+      if (img) {
+        img.addEventListener('click', () => {
+          window.open(dataUrl, '_blank');
+        });
+      }
+      if (currentTabId) saveTabSession(currentTabId);
+    } else {
+      const chunk = `<div class="tool-step-chip tool-step-screenshot">${innerHtml}</div>`;
+      appendToTabSession(targetId, chunk);
     }
   }
 
-  function appendScriptCard(scriptData, alreadyExecuted = false) {
+  function appendScriptCard(scriptData, alreadyExecuted = false, targetTabId = null) {
+    const targetId = targetTabId || currentTabId;
     const cardId = scriptData.id || `script_${Date.now()}`;
-    const existing = document.getElementById(`card_${cardId}`);
-    if (existing) {
-      // Already displayed; update status badge if needed
-      const badge = existing.querySelector(`#badge_${cardId}`);
-      if (badge && alreadyExecuted) {
-        badge.className = 'status-badge executed';
-        badge.textContent = '⚡ Executed in page';
-      }
-      return;
-    }
 
-    const card = document.createElement('div');
-    card.className = 'script-card';
-    card.id = `card_${cardId}`;
-
-    const statusBadgeClass = alreadyExecuted ? 'executed' : 'pending';
-    const statusText = alreadyExecuted ? '⚡ Executed in page' : '⏸️ Ready to run';
-
-    card.innerHTML = `
-      <div class="script-card-header">
-        <span class="script-card-title">${escapeHtml(scriptData.name || 'Userscript')}</span>
-        <span class="status-badge ${statusBadgeClass}" id="badge_${scriptData.id || 'card'}">${statusText}</span>
-      </div>
-      <div class="script-desc">${escapeHtml(scriptData.description || 'Custom DOM userscript')}</div>
-      <div class="code-container">
-        <pre><code>${escapeHtml(scriptData.script || '')}</code></pre>
-      </div>
-      <div class="script-actions">
-        <button class="action-btn primary" id="runBtn_${scriptData.id || 'card'}">▶ Run in Page</button>
-        <button class="action-btn" id="saveBtn_${scriptData.id || 'card'}">💾 Save as Userscript</button>
-        <button class="action-btn" id="copyBtn_${scriptData.id || 'card'}">📋 Copy</button>
-        <button class="action-btn" id="undoBtn_${scriptData.id || 'card'}">↺ Reload (Undo)</button>
-      </div>
-    `;
-
-    messagesFeed.appendChild(card);
-    scrollToBottom();
-
-    // Attach Action Listeners
-    const runBtn = card.querySelector(`#runBtn_${scriptData.id || 'card'}`);
-    const saveBtn = card.querySelector(`#saveBtn_${scriptData.id || 'card'}`);
-    const copyBtn = card.querySelector(`#copyBtn_${scriptData.id || 'card'}`);
-    const undoBtn = card.querySelector(`#undoBtn_${scriptData.id || 'card'}`);
-    const badge = card.querySelector(`#badge_${scriptData.id || 'card'}`);
-
-    runBtn.addEventListener('click', async () => {
-      runBtn.disabled = true;
-      runBtn.textContent = 'Running...';
-      const res = await ScriptManager.executeInTab(activeTab.id, scriptData.script, scriptData.name);
-      runBtn.disabled = false;
-      runBtn.textContent = '▶ Re-run';
-      if (res && res.success) {
-        badge.className = 'status-badge executed';
-        badge.textContent = '⚡ Executed in page';
-      } else {
-        badge.className = 'status-badge pending';
-        badge.textContent = `⚠️ Error: ${res ? res.error : 'Execution failed'}`;
-      }
-    });
-
-    saveBtn.addEventListener('click', () => {
-      let defaultPattern = '<all_urls>';
-      if (activeTab && activeTab.url) {
-        try {
-          const urlObj = new URL(activeTab.url);
-          defaultPattern = `*://*.${urlObj.hostname.replace(/^www\./, '')}/*`;
-        } catch (e) {}
+    if (!targetId || targetId === currentTabId) {
+      const existing = document.getElementById(`card_${cardId}`);
+      if (existing) {
+        // Already displayed; update status badge if needed
+        const badge = existing.querySelector(`#badge_${cardId}`);
+        if (badge && alreadyExecuted) {
+          badge.className = 'status-badge executed';
+          badge.textContent = '⚡ Executed in page';
+        }
+        return;
       }
 
-      openScriptModal({
-        name: scriptData.name || 'AI Generated Script',
-        matchPatterns: [defaultPattern],
-        code: scriptData.script || '',
-        enabled: true
+      const card = document.createElement('div');
+      card.className = 'script-card';
+      card.id = `card_${cardId}`;
+      card.dataset.id = cardId;
+      card.dataset.name = scriptData.name || 'Userscript';
+      card.dataset.script = scriptData.script || '';
+      card.dataset.description = scriptData.description || '';
+
+      const statusBadgeClass = alreadyExecuted ? 'executed' : 'pending';
+      const statusText = alreadyExecuted ? '⚡ Executed in page' : '⏸️ Ready to run';
+
+      card.innerHTML = `
+        <div class="script-card-header">
+          <span class="script-card-title">${escapeHtml(scriptData.name || 'Userscript')}</span>
+          <span class="status-badge ${statusBadgeClass}" id="badge_${cardId}">${statusText}</span>
+        </div>
+        <div class="script-desc">${escapeHtml(scriptData.description || 'Custom DOM userscript')}</div>
+        <div class="code-container">
+          <pre><code>${escapeHtml(scriptData.script || '')}</code></pre>
+        </div>
+        <div class="script-actions">
+          <button class="action-btn primary" id="runBtn_${cardId}">▶ Run in Page</button>
+          <button class="action-btn" id="saveBtn_${cardId}">💾 Save as Userscript</button>
+          <button class="action-btn" id="copyBtn_${cardId}">📋 Copy</button>
+          <button class="action-btn" id="undoBtn_${cardId}">↺ Reload (Undo)</button>
+        </div>
+      `;
+
+      messagesFeed.appendChild(card);
+      scrollToBottom();
+
+      // Attach Action Listeners
+      const runBtn = card.querySelector(`#runBtn_${cardId}`);
+      const saveBtn = card.querySelector(`#saveBtn_${cardId}`);
+      const copyBtn = card.querySelector(`#copyBtn_${cardId}`);
+      const undoBtn = card.querySelector(`#undoBtn_${cardId}`);
+      const badge = card.querySelector(`#badge_${cardId}`);
+
+      runBtn.addEventListener('click', async () => {
+        runBtn.disabled = true;
+        runBtn.textContent = 'Running...';
+        const execTargetId = activeTab?.id || currentTabId;
+        const res = await ScriptManager.executeInTab(execTargetId, scriptData.script, scriptData.name);
+        runBtn.disabled = false;
+        runBtn.textContent = '▶ Re-run';
+        if (res && res.success) {
+          badge.className = 'status-badge executed';
+          badge.textContent = '⚡ Executed in page';
+        } else {
+          badge.className = 'status-badge pending';
+          badge.textContent = `⚠️ Error: ${res ? res.error : 'Execution failed'}`;
+        }
+        if (currentTabId) saveTabSession(currentTabId);
       });
-    });
 
-    copyBtn.addEventListener('click', () => {
-      navigator.clipboard.writeText(scriptData.script);
-      copyBtn.textContent = '✓ Copied!';
-      setTimeout(() => (copyBtn.textContent = '📋 Copy'), 2000);
-    });
+      saveBtn.addEventListener('click', () => {
+        let defaultPattern = '<all_urls>';
+        if (activeTab && activeTab.url) {
+          try {
+            const urlObj = new URL(activeTab.url);
+            defaultPattern = `*://*.${urlObj.hostname.replace(/^www\./, '')}/*`;
+          } catch (e) {}
+        }
 
-    undoBtn.addEventListener('click', async () => {
-      if (activeTab && activeTab.id) {
-        await chrome.tabs.reload(activeTab.id);
-        appendToolStep('Reloaded active tab to revert DOM modifications.');
-      }
-    });
+        openScriptModal({
+          name: scriptData.name || 'AI Generated Script',
+          matchPatterns: [defaultPattern],
+          code: scriptData.script || '',
+          enabled: true
+        });
+      });
+
+      copyBtn.addEventListener('click', () => {
+        navigator.clipboard.writeText(scriptData.script);
+        copyBtn.textContent = '✓ Copied!';
+        setTimeout(() => (copyBtn.textContent = '📋 Copy'), 2000);
+      });
+
+      undoBtn.addEventListener('click', async () => {
+        const undoTargetId = activeTab?.id || currentTabId;
+        if (undoTargetId) {
+          await chrome.tabs.reload(undoTargetId);
+          appendToolStep('Reloaded active tab to revert DOM modifications.');
+        }
+      });
+
+      if (currentTabId) saveTabSession(currentTabId);
+    } else {
+      const statusBadgeClass = alreadyExecuted ? 'executed' : 'pending';
+      const statusText = alreadyExecuted ? '⚡ Executed in page' : '⏸️ Ready to run';
+      const cardHtml = `
+        <div class="script-card" id="card_${cardId}" data-id="${escapeHtml(cardId)}" data-name="${escapeHtml(scriptData.name || '')}" data-script="${escapeHtml(scriptData.script || '')}" data-description="${escapeHtml(scriptData.description || '')}">
+          <div class="script-card-header">
+            <span class="script-card-title">${escapeHtml(scriptData.name || 'Userscript')}</span>
+            <span class="status-badge ${statusBadgeClass}" id="badge_${cardId}">${statusText}</span>
+          </div>
+          <div class="script-desc">${escapeHtml(scriptData.description || 'Custom DOM userscript')}</div>
+          <div class="code-container">
+            <pre><code>${escapeHtml(scriptData.script || '')}</code></pre>
+          </div>
+          <div class="script-actions">
+            <button class="action-btn primary" id="runBtn_${cardId}">▶ Run in Page</button>
+            <button class="action-btn" id="saveBtn_${cardId}">💾 Save as Userscript</button>
+            <button class="action-btn" id="copyBtn_${cardId}">📋 Copy</button>
+            <button class="action-btn" id="undoBtn_${cardId}">↺ Reload (Undo)</button>
+          </div>
+        </div>
+      `;
+      appendToTabSession(targetId, cardHtml);
+    }
   }
 
   async function getConfig() {
@@ -1352,31 +1740,14 @@ ${customInstructions ? 'User Custom Instructions: ' + customInstructions : ''}`
     }
   }
 
-  function clearConversation() {
-    conversationHistory = [];
-    messageQueue = [];
+  async function clearConversation() {
+    resetConversationFeed();
     handleRemoveScreenshot();
-    messagesFeed.innerHTML = `
-      <div class="welcome-card" id="welcomeCard">
-        <div class="welcome-icon">⚡</div>
-        <h3>Page-Agent DOM Copilot</h3>
-        <p>Chat with the AI agent to inspect the page DOM and generate custom userscripts that modify styles, hide ads, or add features.</p>
-        <div class="suggestion-chips">
-          <button class="chip" data-prompt="Hide all ads, banners, and sponsored sections on this page">🚫 Hide Ads & Banners</button>
-          <button class="chip" data-prompt="Enable high-contrast dark mode for this page">🌙 Dark Mode Stylesheet</button>
-          <button class="chip" data-prompt="Make the top navigation header floating sticky with a blur backdrop">📌 Sticky Nav Header</button>
-          <button class="chip" data-prompt="Add a button at the top of the main table to export data as CSV">📊 Add Table CSV Export</button>
-        </div>
-      </div>
-    `;
-
-    document.querySelectorAll('.chip').forEach((chip) => {
-      chip.addEventListener('click', () => {
-        promptInput.value = chip.getAttribute('data-prompt');
-        handleSend();
-      });
-    });
+    if (currentTabId) {
+      await TabSessionManager.clearSession(currentTabId);
+    }
   }
+
 
   // -------------------------------------------------------------
   // Saved Scripts Manager (Tampermonkey style)
@@ -1648,9 +2019,18 @@ ${customInstructions ? 'User Custom Instructions: ' + customInstructions : ''}`
     return escaped;
   }
 
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', init);
-  } else {
-    init();
+  if (typeof window !== 'undefined') {
+    window.TabSessionManager = TabSessionManager;
+  }
+  if (typeof module !== 'undefined' && module.exports) {
+    module.exports = { TabSessionManager };
+  }
+
+  if (typeof document !== 'undefined' && typeof process === 'undefined') {
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', init);
+    } else {
+      init();
+    }
   }
 })();

@@ -404,6 +404,120 @@ console.log("imported directly!");`;
     assert.ok(optionsJs.includes('autoScreenshot:'), 'options.js must save/restore autoScreenshot');
   });
 
+  // -------------------------------------------------------------
+  // Test 7: Per-Tab Scoped Side Panel & Isolated Chat Sessions
+  // -------------------------------------------------------------
+  console.log('\n7. Per-Tab Scoped Side Panel & Isolated Session Tests:');
+
+  const manifestData = JSON.parse(fs.readFileSync(path.join(ROOT_DIR, 'manifest.json'), 'utf8'));
+
+  await test('manifest.json omits default_path in side_panel to allow per-tab scoping', () => {
+    assert.strictEqual(manifestData.side_panel?.default_path, undefined, 'default_path must not be set globally');
+  });
+
+  const bgCode = fs.readFileSync(path.join(ROOT_DIR, 'background.js'), 'utf8');
+
+  await test('background.js disables side panel globally on initial start', () => {
+    assert.ok(bgCode.includes('chrome.sidePanel.setOptions({ enabled: false })'), 'Must disable side panel globally');
+  });
+
+  await test('background.js toggles per-tab side panel with tabId and scoped path on action click', () => {
+    assert.ok(bgCode.includes('chrome.action.onClicked'), 'Must listen to action clicked');
+    assert.ok(bgCode.includes('enabledTabs.has(tab.id)'), 'Must track enabled tabs');
+    assert.ok(bgCode.includes('path: `sidepanel/sidepanel.html?tabId=${tab.id}`'), 'Must scope path with tabId query param');
+    assert.ok(bgCode.includes('chrome.sidePanel.open({ tabId: tab.id })'), 'Must open panel for specific tabId');
+  });
+
+  await test('background.js cleans up tab session and tracked state when tab is closed', () => {
+    assert.ok(bgCode.includes('chrome.tabs.onRemoved'), 'Must listen to tabs onRemoved');
+    assert.ok(bgCode.includes('tab_session_${tabId}'), 'Must clean up tab_session key');
+  });
+
+  await test('sidepanel.js implements per-tab session isolation logic and storage methods', () => {
+    assert.ok(sidepanelCode.includes('TabSessionManager'), 'Must define TabSessionManager');
+    assert.ok(sidepanelCode.includes('saveTabSession'), 'Must define saveTabSession');
+    assert.ok(sidepanelCode.includes('loadTabSession'), 'Must define loadTabSession');
+    assert.ok(sidepanelCode.includes('handleTabSwitch'), 'Must define handleTabSwitch');
+    assert.ok(sidepanelCode.includes('reattachFeedListeners'), 'Must define reattachFeedListeners');
+    assert.ok(sidepanelCode.includes("urlParams.has('tabId')"), 'Must parse tabId from query parameters');
+  });
+
+  await test('TabSessionManager saves, isolates, restores, and clears sessions for different tabs', async () => {
+    // Mock storage environment for TabSessionManager
+    let sessionStore = {};
+    const mockStorage = {
+      get: (key) => Promise.resolve({ [key]: sessionStore[key] }),
+      set: (obj) => {
+        Object.assign(sessionStore, obj);
+        return Promise.resolve();
+      },
+      remove: (key) => {
+        delete sessionStore[key];
+        return Promise.resolve();
+      }
+    };
+
+    global.chrome = global.chrome || {};
+    global.chrome.storage = global.chrome.storage || {};
+    global.chrome.storage.session = mockStorage;
+
+    global.document = {
+      getElementById: () => ({
+        addEventListener: () => {},
+        classList: { add: () => {}, remove: () => {} },
+        appendChild: () => {},
+        querySelectorAll: () => []
+      }),
+      querySelectorAll: () => [],
+      addEventListener: () => {}
+    };
+    global.window = {
+      location: { search: '' },
+      addEventListener: () => {}
+    };
+
+    const SidepanelModule = require('../sidepanel/sidepanel.js');
+    const tsm = SidepanelModule.TabSessionManager;
+    assert.ok(tsm, 'TabSessionManager must be exported');
+
+    // Save Tab 101 session
+    const session101 = {
+      conversationHistory: [{ role: 'user', parts: [{ text: 'Clean Economist page' }] }],
+      messageQueue: [],
+      feedHtml: '<div class="message-row user">Clean Economist page</div>',
+      url: 'https://archive.ph/test1',
+      domain: 'archive.ph',
+      timestamp: Date.now()
+    };
+    await tsm.saveSession(101, session101);
+
+    // Save Tab 102 session
+    const session102 = {
+      conversationHistory: [{ role: 'user', parts: [{ text: 'Dark mode for Hacker News' }] }],
+      messageQueue: [],
+      feedHtml: '<div class="message-row user">Dark mode for Hacker News</div>',
+      url: 'https://news.ycombinator.com/',
+      domain: 'news.ycombinator.com',
+      timestamp: Date.now()
+    };
+    await tsm.saveSession(102, session102);
+
+    // Verify isolation
+    const loaded101 = await tsm.loadSession(101);
+    const loaded102 = await tsm.loadSession(102);
+    assert.strictEqual(loaded101.domain, 'archive.ph');
+    assert.strictEqual(loaded101.conversationHistory[0].parts[0].text, 'Clean Economist page');
+    assert.strictEqual(loaded102.domain, 'news.ycombinator.com');
+    assert.strictEqual(loaded102.conversationHistory[0].parts[0].text, 'Dark mode for Hacker News');
+
+    // Clear Tab 101 session
+    await tsm.clearSession(101);
+    const cleared101 = await tsm.loadSession(101);
+    const retained102 = await tsm.loadSession(102);
+    assert.strictEqual(cleared101, null);
+    assert.strictEqual(retained102.domain, 'news.ycombinator.com');
+  });
+
   console.log(`\n========================================`);
   console.log(`Test Results: ${passed} passed, ${failed} failed`);
   console.log(`========================================\n`);

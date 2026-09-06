@@ -1,21 +1,53 @@
 // background.js - Service Worker for Userscript AI Agent
 
-// Configure side panel to open on action button click
-if (chrome.sidePanel && chrome.sidePanel.setPanelBehavior) {
-  chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true })
-    .catch((err) => console.warn('[Userscript AI Agent] Failed to set panel behavior:', err));
+// Disable side panel globally so it never shows on tabs unless explicitly opened for that tab
+if (chrome.sidePanel && chrome.sidePanel.setOptions) {
+  chrome.sidePanel.setOptions({ enabled: false }).catch(() => {});
 }
 
-// Fallback action click handler
+// Track tabs where user enabled the side panel
+const enabledTabs = new Set();
+
+// Action click: toggle per-tab side panel
 chrome.action.onClicked.addListener(async (tab) => {
-  if (chrome.sidePanel && chrome.sidePanel.open) {
-    try {
-      await chrome.sidePanel.open({ windowId: tab.windowId });
-    } catch (e) {
-      console.warn('[Userscript AI Agent] Fallback sidePanel.open failed:', e);
+  if (!tab || !tab.id) return;
+  try {
+    if (enabledTabs.has(tab.id)) {
+      // Toggle OFF: disable panel for this tab (automatically hides/closes it)
+      enabledTabs.delete(tab.id);
+      await chrome.sidePanel.setOptions({
+        tabId: tab.id,
+        enabled: false
+      });
+    } else {
+      // Toggle ON: enable and open panel specifically for this tab
+      enabledTabs.add(tab.id);
+      await chrome.sidePanel.setOptions({
+        tabId: tab.id,
+        path: `sidepanel/sidepanel.html?tabId=${tab.id}`,
+        enabled: true
+      });
+      if (chrome.sidePanel.open) {
+        await chrome.sidePanel.open({ tabId: tab.id });
+      }
     }
+  } catch (err) {
+    console.warn('[Userscript AI Agent] Failed to toggle per-tab side panel:', err);
   }
 });
+
+// Clean up tab session storage and tracked state when tab is closed
+if (chrome.tabs && chrome.tabs.onRemoved) {
+  chrome.tabs.onRemoved.addListener((tabId) => {
+    enabledTabs.delete(tabId);
+    const key = `tab_session_${tabId}`;
+    if (chrome.storage && chrome.storage.session) {
+      chrome.storage.session.remove(key).catch(() => {});
+    } else if (chrome.storage && chrome.storage.local) {
+      chrome.storage.local.remove(key).catch(() => {});
+    }
+  });
+}
 
 /**
  * Converts a userscript match pattern into a RegExp.
