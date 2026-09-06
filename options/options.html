@@ -97,11 +97,11 @@
 
       <div class="form-group">
         <label class="checkbox-container" style="display:flex;align-items:center;gap:8px;font-weight:600;cursor:pointer;">
-          <input type="checkbox" id="autoScreenshotCheckbox" checked />
-          <span>Auto-Capture Visual Screenshots</span>
+          <input type="checkbox" id="autoCompactCheckbox" checked />
+          <span>Auto-Compact Conversation History (Page-Agent Compaction)</span>
         </label>
         <p class="help-text">
-          When enabled, the agent automatically captures and inspects page screenshots whenever you ask about layout, formatting, styling, or broken appearance—so you never have to click a button manually.
+          When enabled, the agent automatically prunes older base64 screenshots and duplicate DOM snapshots, and compacts conversation history beyond 6 turns to keep context windows lean and responses fast.
         </p>
       </div>
 

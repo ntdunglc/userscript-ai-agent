@@ -390,18 +390,17 @@ console.log("imported directly!");`;
     assert.ok(sidepanelCode.includes('inlineData:'), 'Must format screenshot data as inlineData');
   });
 
-  await test('sidepanel.js provides autonomous screenshot perception without user button interaction', () => {
-    assert.ok(sidepanelCode.includes('visualKeywords'), 'Must define visualKeywords for automatic visual perception');
-    assert.ok(sidepanelCode.includes('config.autoScreenshot'), 'Must respect autoScreenshot configuration');
-    assert.ok(sidepanelCode.includes('Agent auto-capturing tab screenshot'), 'Must log auto-capture tool step');
+  await test('sidepanel.js provides capture_screenshot tool for on-demand visual inspection without auto-injection', () => {
+    assert.ok(sidepanelCode.includes("name: 'capture_screenshot'"), 'Tools array must declare capture_screenshot');
+    assert.ok(sidepanelCode.includes('captureTabScreenshot'), 'Must implement captureTabScreenshot');
   });
 
   const optionsHtml = fs.readFileSync(path.join(ROOT_DIR, 'options/options.html'), 'utf8');
   const optionsJs = fs.readFileSync(path.join(ROOT_DIR, 'options/options.js'), 'utf8');
 
-  await test('options page provides autoScreenshot toggle configuration', () => {
-    assert.ok(optionsHtml.includes('id="autoScreenshotCheckbox"'), 'options.html must have autoScreenshotCheckbox');
-    assert.ok(optionsJs.includes('autoScreenshot:'), 'options.js must save/restore autoScreenshot');
+  await test('options page provides autoCompact toggle configuration', () => {
+    assert.ok(optionsHtml.includes('id="autoCompactCheckbox"'), 'options.html must have autoCompactCheckbox');
+    assert.ok(optionsJs.includes('autoCompact:'), 'options.js must save/restore autoCompact');
   });
 
   // -------------------------------------------------------------
@@ -516,6 +515,129 @@ console.log("imported directly!");`;
     const retained102 = await tsm.loadSession(102);
     assert.strictEqual(cleared101, null);
     assert.strictEqual(retained102.domain, 'news.ycombinator.com');
+  });
+
+  // -------------------------------------------------------------
+  // Test 8: Context Auto-Compactor Tests (Page-Agent Compaction)
+  // -------------------------------------------------------------
+  console.log('\n8. Context Auto-Compactor Tests (Page-Agent Compaction):');
+
+  await test('ContextCompactor is exported and available in SidepanelModule', () => {
+    const SidepanelModule = require('../sidepanel/sidepanel.js');
+    assert.ok(SidepanelModule.ContextCompactor, 'ContextCompactor must be exported');
+  });
+
+  await test('ContextCompactor prunes older base64 screenshots and preserves most recent one', () => {
+    const SidepanelModule = require('../sidepanel/sidepanel.js');
+    const compactor = SidepanelModule.ContextCompactor;
+
+    const mockHistory = [
+      {
+        role: 'user',
+        parts: [
+          { text: 'Look at the page header' },
+          { inlineData: { mimeType: 'image/jpeg', data: 'FIRST_BASE64_IMAGE_DATA_VERY_LARGE' } }
+        ]
+      },
+      {
+        role: 'model',
+        parts: [{ text: 'I see the header. I will inspect it.' }]
+      },
+      {
+        role: 'user',
+        parts: [
+          {
+            functionResponse: {
+              name: 'capture_screenshot',
+              response: {
+                status: 'success',
+                inlineData: { mimeType: 'image/jpeg', data: 'SECOND_BASE64_IMAGE_DATA' }
+              }
+            }
+          }
+        ]
+      },
+      {
+        role: 'user',
+        parts: [
+          { text: 'Now check the footer' },
+          { inlineData: { mimeType: 'image/jpeg', data: 'THIRD_BASE64_IMAGE_DATA_MOST_RECENT' } }
+        ]
+      }
+    ];
+
+    const res = compactor.compact(mockHistory, { maxRecentImages: 1 });
+    assert.strictEqual(res.prunedImages, 2, 'Must prune 2 older screenshots');
+
+    // Verify first user message image was pruned
+    const firstUserMsg = res.compacted[0];
+    assert.strictEqual(firstUserMsg.parts.some(p => p.inlineData), false, 'First message must have inlineData removed');
+    assert.ok(firstUserMsg.parts.some(p => p.text && p.text.includes('Previous viewport screenshot analyzed')), 'Must include replacement text');
+
+    // Verify tool screenshot was pruned
+    const toolMsg = res.compacted[2];
+    assert.strictEqual(toolMsg.parts[0].functionResponse.response.inlineData, undefined, 'Tool screenshot must have inlineData pruned');
+    assert.strictEqual(toolMsg.parts[0].functionResponse.response.status, 'pruned');
+
+    // Verify most recent screenshot was retained in full fidelity
+    const latestUserMsg = res.compacted[3];
+    assert.ok(latestUserMsg.parts.some(p => p.inlineData && p.inlineData.data === 'THIRD_BASE64_IMAGE_DATA_MOST_RECENT'), 'Most recent screenshot must be preserved');
+  });
+
+  await test('ContextCompactor deduplicates older DOM tree snapshots', () => {
+    const SidepanelModule = require('../sidepanel/sidepanel.js');
+    const compactor = SidepanelModule.ContextCompactor;
+
+    const mockHistory = [
+      {
+        role: 'user',
+        parts: [
+          { text: 'First prompt\n\n[Active Page DOM Context]\n## Page: "Test Title"\n| tag | selector |\n| button | #btn |' }
+        ]
+      },
+      {
+        role: 'model',
+        parts: [{ text: 'Ran query' }]
+      },
+      {
+        role: 'user',
+        parts: [
+          {
+            functionResponse: {
+              name: 'dehydrate_dom',
+              response: { dom: '## Page: "Fresh Title"\n| tag | selector |\n| input | #input |' }
+            }
+          }
+        ]
+      }
+    ];
+
+    const res = compactor.compact(mockHistory, { maxRecentImages: 1 });
+    assert.strictEqual(res.prunedDomSnapshots, 1, 'Must deduplicate older DOM snapshot');
+    assert.ok(res.compacted[0].parts[0].text.includes('Earlier DOM snapshot pruned'), 'Old DOM snapshot must be trimmed');
+    assert.ok(res.compacted[2].parts[0].functionResponse.response.dom.includes('Fresh Title'), 'Fresh DOM snapshot must be preserved');
+  });
+
+  await test('ContextCompactor applies sliding-window turn compaction when history exceeds limit', () => {
+    const SidepanelModule = require('../sidepanel/sidepanel.js');
+    const compactor = SidepanelModule.ContextCompactor;
+
+    // Create a 20-entry history (10 turns)
+    const mockHistory = [];
+    mockHistory.push({ role: 'user', parts: [{ text: 'Initial Goal: Clean the entire page layout' }] });
+    for (let i = 1; i <= 9; i++) {
+      mockHistory.push({ role: 'model', parts: [{ text: `Step ${i}: Inspecting element ${i}` }] });
+      mockHistory.push({ role: 'user', parts: [{ text: `Follow-up ${i}: Now proceed with step ${i + 1}` }] });
+    }
+    mockHistory.push({ role: 'model', parts: [{ text: 'Final model response' }] });
+
+    assert.strictEqual(mockHistory.length, 20);
+
+    const res = compactor.compact(mockHistory, { maxRecentTurns: 4 });
+    assert.ok(res.compactedTurns > 0, 'Must compact intermediate turns');
+    assert.ok(res.compacted.length < 20, 'Compacted history must have fewer total entries');
+    assert.strictEqual(res.compacted[0].parts[0].text, 'Initial Goal: Clean the entire page layout', 'Must preserve initial goal');
+    assert.ok(res.compacted[1].parts[0].text.includes('Context Compaction Summary'), 'Must summarize intermediate steps');
   });
 
   console.log(`\n========================================`);

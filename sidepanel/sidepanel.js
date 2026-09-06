@@ -128,6 +128,138 @@
     }
   };
 
+  // -------------------------------------------------------------
+  // Context Auto-Compactor (Page-Agent Architecture)
+  // -------------------------------------------------------------
+
+  const ContextCompactor = {
+    /**
+     * Compacts conversation history to stay within token-efficient limits:
+     * 1. Strips heavy base64 image data from older turns, preserving only the most recent N screenshots.
+     * 2. Deduplicates / trims historical DOM tree dumps, retaining only the latest DOM snapshot.
+     * 3. Summarizes older intermediate tool steps when history exceeds maxRecentTurns.
+     * @param {Array} history - Full conversation history array
+     * @param {Object} options - { maxRecentImages: 1, maxRecentTurns: 6 }
+     * @returns {{ compacted: Array, prunedImages: number, prunedDomSnapshots: number, compactedTurns: number }}
+     */
+    compact(history, options = {}) {
+      if (!Array.isArray(history) || history.length === 0) {
+        return { compacted: history || [], prunedImages: 0, prunedDomSnapshots: 0, compactedTurns: 0 };
+      }
+
+      const maxRecentImages = options.maxRecentImages !== undefined ? options.maxRecentImages : 1;
+      const maxRecentTurns = options.maxRecentTurns || 6;
+      let prunedImages = 0;
+      let prunedDomSnapshots = 0;
+      let compactedTurns = 0;
+
+      // 1. Prune older screenshots (walk backwards from most recent)
+      let imagesSeen = 0;
+      for (let i = history.length - 1; i >= 0; i--) {
+        const item = history[i];
+        if (!item || !Array.isArray(item.parts)) continue;
+
+        for (let j = item.parts.length - 1; j >= 0; j--) {
+          const part = item.parts[j];
+          if (!part) continue;
+
+          // Case A: User attached screenshot in inlineData
+          if (part.inlineData) {
+            imagesSeen++;
+            if (imagesSeen > maxRecentImages) {
+              // Replace inlineData with text description so Gemini knows an image was analyzed
+              delete part.inlineData;
+              part.text = '[Previous viewport screenshot analyzed: visual layout and styling previously inspected]';
+              prunedImages++;
+            }
+          }
+
+          // Case B: capture_screenshot tool response
+          if (part.functionResponse && part.functionResponse.name === 'capture_screenshot') {
+            const resp = part.functionResponse.response;
+            if (resp && resp.inlineData) {
+              imagesSeen++;
+              if (imagesSeen > maxRecentImages) {
+                delete resp.inlineData;
+                resp.status = 'pruned';
+                resp.message = '[Historical screenshot pruned to optimize context tokens]';
+                if (part.functionResponse.parts) {
+                  part.functionResponse.parts = [{ text: '[Historical screenshot pruned to optimize context tokens]' }];
+                }
+                prunedImages++;
+              }
+            }
+          }
+        }
+      }
+
+      // 2. Deduplicate older DOM tree dumps (keep only the most recent one)
+      let domSnapshotSeen = 0;
+      for (let i = history.length - 1; i >= 0; i--) {
+        const item = history[i];
+        if (!item || !Array.isArray(item.parts)) continue;
+
+        for (let j = item.parts.length - 1; j >= 0; j--) {
+          const part = item.parts[j];
+          if (!part) continue;
+
+          // Case A: Initial DOM Context in user prompt
+          if (part.text && part.text.includes('[Active Page DOM Context]')) {
+            domSnapshotSeen++;
+            if (domSnapshotSeen > 1) {
+              part.text = part.text.replace(
+                /\[Active Page DOM Context\][\s\S]*$/,
+                '[Active Page DOM Context: Earlier DOM snapshot pruned; latest DOM state is in subsequent steps]'
+              );
+              prunedDomSnapshots++;
+            }
+          }
+
+          // Case B: dehydrate_dom tool response
+          if (part.functionResponse && part.functionResponse.name === 'dehydrate_dom') {
+            domSnapshotSeen++;
+            if (domSnapshotSeen > 1) {
+              if (part.functionResponse.response && part.functionResponse.response.dom) {
+                part.functionResponse.response.dom = '[Earlier DOM snapshot pruned; see latest DOM context]';
+                prunedDomSnapshots++;
+              }
+            }
+          }
+        }
+      }
+
+      // 3. Sliding-window turn compaction
+      // Keep initial user request (index 0) + most recent (maxRecentTurns * 2) entries
+      const recentEntriesCount = maxRecentTurns * 2;
+      if (history.length > recentEntriesCount + 2) {
+        const intermediateCount = history.length - 1 - recentEntriesCount;
+        if (intermediateCount > 2) {
+          const summaryUser = {
+            role: 'user',
+            parts: [{
+              text: `[Context Compaction Summary: The agent previously completed ${Math.floor(intermediateCount / 2)} intermediate DOM analysis and script iteration steps. Relevant element selectors and script refinements have been incorporated. Current goal continues below.]`
+            }]
+          };
+          const summaryModel = {
+            role: 'model',
+            parts: [{
+              text: 'Understood. I will continue from the latest state and current page context.'
+            }]
+          };
+          history.splice(1, intermediateCount, summaryUser, summaryModel);
+          compactedTurns = intermediateCount;
+        }
+      }
+
+      return {
+        compacted: history,
+        prunedImages,
+        prunedDomSnapshots,
+        compactedTurns
+      };
+    }
+  };
+
   async function saveTabSession(tabId) {
     const id = tabId || currentTabId;
     if (!id) return;
@@ -1002,13 +1134,15 @@
   async function getConfig() {
     if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
       try {
-        const data = await chrome.storage.local.get(['geminiApiKey', 'geminiModel', 'customInstructions', 'maxTurns', 'autoScreenshot']);
+        const data = await chrome.storage.local.get(['geminiApiKey', 'geminiModel', 'customInstructions', 'maxTurns', 'autoScreenshot', 'autoCompact', 'maxRecentImages']);
         return {
           geminiApiKey: data.geminiApiKey || '',
           geminiModel: data.geminiModel || 'gemini-flash-latest',
           customInstructions: data.customInstructions || '',
           maxTurns: data.maxTurns || 15,
-          autoScreenshot: data.autoScreenshot !== undefined ? data.autoScreenshot : true
+          autoScreenshot: data.autoScreenshot !== undefined ? data.autoScreenshot : true,
+          autoCompact: data.autoCompact !== undefined ? data.autoCompact : true,
+          maxRecentImages: data.maxRecentImages || 1
         };
       } catch (e) {
         console.warn('chrome.storage error:', e);
@@ -1020,10 +1154,12 @@
         geminiModel: localStorage.getItem('geminiModel') || 'gemini-flash-latest',
         customInstructions: localStorage.getItem('customInstructions') || '',
         maxTurns: parseInt(localStorage.getItem('maxTurns'), 10) || 15,
-        autoScreenshot: localStorage.getItem('autoScreenshot') !== 'false'
+        autoScreenshot: localStorage.getItem('autoScreenshot') !== 'false',
+        autoCompact: localStorage.getItem('autoCompact') !== 'false',
+        maxRecentImages: parseInt(localStorage.getItem('maxRecentImages'), 10) || 1
       };
     } catch (e) {
-      return { geminiApiKey: '', geminiModel: 'gemini-flash-latest', customInstructions: '', maxTurns: 15, autoScreenshot: true };
+      return { geminiApiKey: '', geminiModel: 'gemini-flash-latest', customInstructions: '', maxTurns: 15, autoScreenshot: true, autoCompact: true, maxRecentImages: 1 };
     }
   }
 
@@ -1133,22 +1269,6 @@
         }
       } catch (e) {
         console.warn('Failed to load matching scripts for prompt:', e);
-      }
-    }
-
-    // Autonomous Visual Perception:
-    // If user did not manually attach a screenshot, automatically capture one if:
-    // 1. Config has autoScreenshot enabled (default: true), AND
-    // 2. The user's prompt involves visual layout, styling, formatting, appearance, or asking the agent to see/inspect the page.
-    if (!userScreenshot && config.autoScreenshot !== false) {
-      const visualKeywords = /(screenshot|format|layout|look|visual|appearance|broken|spacing|align|overlap|banner|header|font|style|css|ugly|hide|reader|clean|paywall|see|view|off|distort|clutter|color)/i;
-      if (visualKeywords.test(userPrompt)) {
-        appendToolStep('📸 Agent auto-capturing tab screenshot for visual inspection...');
-        const shotRes = await captureTabScreenshot();
-        if (shotRes.success && shotRes.dataUrl) {
-          userScreenshot = shotRes.dataUrl;
-          appendScreenshotToolStep('Agent visual inspection of active tab', shotRes.dataUrl);
-        }
       }
     }
 
@@ -1340,6 +1460,23 @@ ${customInstructions ? 'User Custom Instructions: ' + customInstructions : ''}`
 
     while (turn < maxTurns) {
       turn++;
+
+      // Auto-Compact context if enabled
+      if (config.autoCompact !== false) {
+        const compactRes = ContextCompactor.compact(conversationHistory, {
+          maxRecentImages: config.maxRecentImages || 1,
+          maxRecentTurns: 6
+        });
+        if (compactRes.prunedImages > 0 || compactRes.prunedDomSnapshots > 0 || compactRes.compactedTurns > 0) {
+          const details = [];
+          if (compactRes.prunedImages > 0) details.push(`pruned ${compactRes.prunedImages} older screenshot(s)`);
+          if (compactRes.prunedDomSnapshots > 0) details.push(`pruned ${compactRes.prunedDomSnapshots} older DOM dump(s)`);
+          if (compactRes.compactedTurns > 0) details.push(`compacted ${compactRes.compactedTurns} older turn(s)`);
+          appendToolStep(`⚡ Auto-compacted history: ${details.join(', ')} to optimize tokens.`);
+          if (currentTabId) saveTabSession(currentTabId);
+        }
+      }
+
       const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`;
 
       const requestBody = {
@@ -2021,9 +2158,10 @@ ${customInstructions ? 'User Custom Instructions: ' + customInstructions : ''}`
 
   if (typeof window !== 'undefined') {
     window.TabSessionManager = TabSessionManager;
+    window.ContextCompactor = ContextCompactor;
   }
   if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { TabSessionManager };
+    module.exports = { TabSessionManager, ContextCompactor };
   }
 
   if (typeof document !== 'undefined' && typeof process === 'undefined') {

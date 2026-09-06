@@ -6,7 +6,7 @@ const modelSelect = document.getElementById('modelSelect');
 const customModelInput = document.getElementById('customModelInput');
 const customInstructionsInput = document.getElementById('customInstructions');
 const maxTurnsInput = document.getElementById('maxTurnsInput');
-const autoScreenshotCheckbox = document.getElementById('autoScreenshotCheckbox');
+const autoCompactCheckbox = document.getElementById('autoCompactCheckbox');
 const testBtn = document.getElementById('testBtn');
 const saveBtn = document.getElementById('saveBtn');
 const statusBox = document.getElementById('statusMessage');
@@ -59,7 +59,7 @@ function restoreOptions() {
       geminiModel: 'gemini-flash-latest',
       customInstructions: '',
       maxTurns: 15,
-      autoScreenshot: true
+      autoCompact: true
     },
     (items) => {
       apiKeyInput.value = items.geminiApiKey || '';
@@ -88,8 +88,8 @@ function restoreOptions() {
 
       customInstructionsInput.value = items.customInstructions || '';
       maxTurnsInput.value = items.maxTurns || 15;
-      if (autoScreenshotCheckbox) {
-        autoScreenshotCheckbox.checked = items.autoScreenshot !== false;
+      if (autoCompactCheckbox) {
+        autoCompactCheckbox.checked = items.autoCompact !== false;
       }
     }
   );
@@ -101,7 +101,7 @@ function saveOptions() {
   const model = getEffectiveModel();
   const customInstructions = customInstructionsInput.value.trim();
   const maxTurns = parseInt(maxTurnsInput.value, 10) || 15;
-  const autoScreenshot = autoScreenshotCheckbox ? autoScreenshotCheckbox.checked : true;
+  const autoCompact = autoCompactCheckbox ? autoCompactCheckbox.checked : true;
 
   if (!apiKey) {
     showStatus('Please enter a valid Gemini API Key.', false);
@@ -118,7 +118,7 @@ function saveOptions() {
       geminiModel: model,
       customInstructions: customInstructions,
       maxTurns: maxTurns,
-      autoScreenshot: autoScreenshot
+      autoCompact: autoCompact
     },
     () => {
       saveBtn.disabled = false;
