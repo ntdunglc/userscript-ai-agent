@@ -398,9 +398,11 @@ console.log("imported directly!");`;
   const optionsHtml = fs.readFileSync(path.join(ROOT_DIR, 'options/options.html'), 'utf8');
   const optionsJs = fs.readFileSync(path.join(ROOT_DIR, 'options/options.js'), 'utf8');
 
-  await test('options page provides autoCompact toggle configuration', () => {
+  await test('options page provides autoCompact and compactThreshold configuration', () => {
     assert.ok(optionsHtml.includes('id="autoCompactCheckbox"'), 'options.html must have autoCompactCheckbox');
+    assert.ok(optionsHtml.includes('id="compactThresholdInput"'), 'options.html must have compactThresholdInput');
     assert.ok(optionsJs.includes('autoCompact:'), 'options.js must save/restore autoCompact');
+    assert.ok(optionsJs.includes('compactThreshold:'), 'options.js must save/restore compactThreshold');
   });
 
   // -------------------------------------------------------------
@@ -663,6 +665,96 @@ console.log("imported directly!");`;
     assert.ok(res.compacted.length < 20, 'Compacted history must have fewer total entries');
     assert.strictEqual(res.compacted[0].parts[0].text, 'Initial Goal: Clean the entire page layout', 'Must preserve initial goal');
     assert.ok(res.compacted[1].parts[0].text.includes('Context Compaction Summary'), 'Must summarize intermediate steps');
+  });
+
+  await test('ContextCompactor estimates token count accurately across text, images, and tools', () => {
+    const SidepanelModule = require('../sidepanel/sidepanel.js');
+    const compactor = SidepanelModule.ContextCompactor;
+
+    const sampleHistory = [
+      {
+        role: 'user',
+        parts: [
+          { text: 'A'.repeat(400) }, // ~100 tokens
+          { inlineData: { mimeType: 'image/jpeg', data: 'B'.repeat(50000) } } // 258 image tokens
+        ]
+      },
+      {
+        role: 'model',
+        parts: [
+          { functionCall: { name: 'dehydrate_dom', args: {} } } // ~10 tokens
+        ]
+      },
+      {
+        role: 'user',
+        parts: [
+          { functionResponse: { name: 'dehydrate_dom', response: { status: 'ok', dom: 'C'.repeat(400) } } } // ~100 tokens
+        ]
+      }
+    ];
+
+    const tokens = compactor.estimateTokens(sampleHistory);
+    assert.ok(tokens >= 400 && tokens <= 600, `Tokens (${tokens}) should be approximately 450-500 tokens`);
+  });
+
+  await test('ContextCompactor skips compaction when conversation is under token limit', () => {
+    const SidepanelModule = require('../sidepanel/sidepanel.js');
+    const compactor = SidepanelModule.ContextCompactor;
+
+    const mockHistory = [
+      {
+        role: 'user',
+        parts: [
+          { text: 'Short query' },
+          { inlineData: { mimeType: 'image/jpeg', data: 'IMG_1' } }
+        ]
+      },
+      {
+        role: 'user',
+        parts: [
+          { text: 'Second query' },
+          { inlineData: { mimeType: 'image/jpeg', data: 'IMG_2' } }
+        ]
+      }
+    ];
+
+    // Under 30,000 token limit: nothing should be compacted or pruned
+    const res = compactor.compact(mockHistory, { tokenLimit: 30000, maxRecentImages: 1 });
+    assert.strictEqual(res.skipped, true, 'Compaction must be skipped when within token budget');
+    assert.strictEqual(res.prunedImages, 0, 'No images should be pruned');
+    assert.strictEqual(res.prunedDomSnapshots, 0, 'No DOM snapshots should be pruned');
+    assert.strictEqual(res.compactedTurns, 0, 'No turns should be compacted');
+    assert.strictEqual(res.compacted[0].parts.some(p => p.inlineData), true, 'First image must remain untouched');
+  });
+
+  await test('ContextCompactor triggers progressive compaction when conversation exceeds token limit', () => {
+    const SidepanelModule = require('../sidepanel/sidepanel.js');
+    const compactor = SidepanelModule.ContextCompactor;
+
+    const mockHistory = [
+      {
+        role: 'user',
+        parts: [
+          { text: 'First query' },
+          { inlineData: { mimeType: 'image/jpeg', data: 'IMG_1' } }
+        ]
+      },
+      {
+        role: 'user',
+        parts: [
+          { text: 'Second query' },
+          { inlineData: { mimeType: 'image/jpeg', data: 'IMG_2' } }
+        ]
+      }
+    ];
+
+    // Tokens before is ~520 (two images = 516 + text). With limit 300, it exceeds and prunes the older image!
+    const res = compactor.compact(mockHistory, { tokenLimit: 300, maxRecentImages: 1 });
+    assert.strictEqual(res.skipped, false, 'Compaction must run when exceeding token limit');
+    assert.strictEqual(res.prunedImages, 1, 'Must prune older screenshot');
+    assert.strictEqual(res.compacted[0].parts.some(p => p.inlineData), false, 'Older image must be pruned');
+    assert.strictEqual(res.compacted[1].parts.some(p => p.inlineData), true, 'Recent image must be preserved');
+    assert.ok(res.tokensAfter < res.tokensBefore, 'Tokens after must be lower than tokens before');
   });
 
   console.log(`\n========================================`);

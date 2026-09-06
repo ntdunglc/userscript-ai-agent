@@ -98,11 +98,25 @@
       <div class="form-group">
         <label class="checkbox-container" style="display:flex;align-items:center;gap:8px;font-weight:600;cursor:pointer;">
           <input type="checkbox" id="autoCompactCheckbox" checked />
-          <span>Auto-Compact Conversation History (Page-Agent Compaction)</span>
+          <span>Auto-Compact Conversation History (Token Threshold Compactor)</span>
         </label>
         <p class="help-text">
-          When enabled, the agent automatically prunes older base64 screenshots and duplicate DOM snapshots, and compacts conversation history beyond 6 turns to keep context windows lean and responses fast.
+          When enabled, the agent preserves all context in full fidelity until estimated conversation tokens exceed the threshold below. Once exceeded, it progressively prunes older screenshots, duplicate DOM dumps, and intermediate turns.
         </p>
+        <div id="compactThresholdContainer" style="margin-top: 10px; display: flex; align-items: center; gap: 8px;">
+          <label for="compactThresholdInput" style="font-size: 13px; font-weight: 500; margin: 0;">Token Limit Threshold:</label>
+          <input 
+            type="number" 
+            id="compactThresholdInput" 
+            name="compactThresholdInput" 
+            min="2000" 
+            max="500000" 
+            step="1000" 
+            value="30000" 
+            style="width: 110px;"
+          />
+          <span style="font-size: 13px; color: var(--text-muted, #64748b);">tokens (default: 30,000)</span>
+        </div>
       </div>
 
       <div class="actions">

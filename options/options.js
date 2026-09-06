@@ -7,9 +7,16 @@ const customModelInput = document.getElementById('customModelInput');
 const customInstructionsInput = document.getElementById('customInstructions');
 const maxTurnsInput = document.getElementById('maxTurnsInput');
 const autoCompactCheckbox = document.getElementById('autoCompactCheckbox');
+const compactThresholdInput = document.getElementById('compactThresholdInput');
 const testBtn = document.getElementById('testBtn');
 const saveBtn = document.getElementById('saveBtn');
 const statusBox = document.getElementById('statusMessage');
+
+if (autoCompactCheckbox && compactThresholdInput) {
+  autoCompactCheckbox.addEventListener('change', () => {
+    compactThresholdInput.disabled = !autoCompactCheckbox.checked;
+  });
+}
 
 // Toggle API key visibility
 toggleApiKeyBtn.addEventListener('click', () => {
@@ -59,7 +66,8 @@ function restoreOptions() {
       geminiModel: 'gemini-flash-latest',
       customInstructions: '',
       maxTurns: 15,
-      autoCompact: true
+      autoCompact: true,
+      compactThreshold: 30000
     },
     (items) => {
       apiKeyInput.value = items.geminiApiKey || '';
@@ -91,6 +99,10 @@ function restoreOptions() {
       if (autoCompactCheckbox) {
         autoCompactCheckbox.checked = items.autoCompact !== false;
       }
+      if (compactThresholdInput) {
+        compactThresholdInput.value = items.compactThreshold || 30000;
+        compactThresholdInput.disabled = items.autoCompact === false;
+      }
     }
   );
 }
@@ -102,6 +114,7 @@ function saveOptions() {
   const customInstructions = customInstructionsInput.value.trim();
   const maxTurns = parseInt(maxTurnsInput.value, 10) || 15;
   const autoCompact = autoCompactCheckbox ? autoCompactCheckbox.checked : true;
+  const compactThreshold = parseInt(compactThresholdInput ? compactThresholdInput.value : 30000, 10) || 30000;
 
   if (!apiKey) {
     showStatus('Please enter a valid Gemini API Key.', false);
@@ -118,7 +131,8 @@ function saveOptions() {
       geminiModel: model,
       customInstructions: customInstructions,
       maxTurns: maxTurns,
-      autoCompact: autoCompact
+      autoCompact: autoCompact,
+      compactThreshold: compactThreshold
     },
     () => {
       saveBtn.disabled = false;

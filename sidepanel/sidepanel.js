@@ -134,17 +134,115 @@
 
   const ContextCompactor = {
     /**
-     * Compacts conversation history to stay within token-efficient limits:
-     * 1. Strips heavy base64 image data from older turns, preserving only the most recent N screenshots.
-     * 2. Deduplicates / trims historical DOM tree dumps, retaining only the latest DOM snapshot.
-     * 3. Summarizes older intermediate tool steps when history exceeds maxRecentTurns.
+     * Estimates the token count of the conversation history.
+     * Heuristic:
+     * - Text & JSON: ~4 characters per token
+     * - Inline images: ~258 tokens (standard Gemini vision modality token cost)
+     * - Tool calls & responses: JSON length / 4 (or 258 for embedded image responses)
+     * @param {Array} history
+     * @returns {number} Estimated token count
+     */
+    estimateTokens(history) {
+      if (!Array.isArray(history) || history.length === 0) return 0;
+      let total = 0;
+      for (const item of history) {
+        if (!item || !Array.isArray(item.parts)) continue;
+        for (const part of item.parts) {
+          if (!part) continue;
+          if (typeof part.text === 'string') {
+            total += Math.ceil(part.text.length / 4);
+          }
+          if (part.inlineData) {
+            total += 258;
+          }
+          if (part.functionCall) {
+            try {
+              total += Math.ceil(JSON.stringify(part.functionCall).length / 4);
+            } catch (e) {
+              total += 50;
+            }
+          }
+          if (part.functionResponse) {
+            const resp = part.functionResponse.response;
+            if (resp) {
+              if (resp.inlineData) {
+                total += 258;
+              } else {
+                try {
+                  total += Math.ceil(JSON.stringify(resp).length / 4);
+                } catch (e) {
+                  total += 50;
+                }
+              }
+            }
+            if (Array.isArray(part.functionResponse.parts)) {
+              for (const p of part.functionResponse.parts) {
+                if (p && p.inlineData) {
+                  total += 258;
+                } else if (p) {
+                  try {
+                    total += Math.ceil(JSON.stringify(p).length / 4);
+                  } catch (e) {
+                    total += 50;
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+      return total;
+    },
+
+    /**
+     * Ensures functionResponse parts conform strictly to Gemini Protobuf schema
+     * (deletes any parts containing text or empty parts).
+     */
+    sanitizeFunctionResponses(history) {
+      if (!Array.isArray(history)) return;
+      for (const item of history) {
+        if (!item || !Array.isArray(item.parts)) continue;
+        for (const part of item.parts) {
+          if (part && part.functionResponse && part.functionResponse.parts) {
+            part.functionResponse.parts = part.functionResponse.parts.filter(p => p && p.inlineData);
+            if (part.functionResponse.parts.length === 0) {
+              delete part.functionResponse.parts;
+            }
+          }
+        }
+      }
+    },
+
+    /**
+     * Compacts conversation history when it exceeds a token limit:
+     * 1. Checks if estimated tokens exceed options.tokenLimit (if provided).
+     * 2. Stage 1: Strips heavy base64 image data from older turns, preserving recent screenshot(s).
+     * 3. Stage 2: Deduplicates / trims historical DOM tree dumps if still above token limit.
+     * 4. Stage 3: Summarizes older intermediate tool steps when history exceeds maxRecentTurns.
      * @param {Array} history - Full conversation history array
-     * @param {Object} options - { maxRecentImages: 1, maxRecentTurns: 6 }
-     * @returns {{ compacted: Array, prunedImages: number, prunedDomSnapshots: number, compactedTurns: number }}
+     * @param {Object} options - { tokenLimit: 30000, force: false, maxRecentImages: 1, maxRecentTurns: 6 }
+     * @returns {{ compacted: Array, prunedImages: number, prunedDomSnapshots: number, compactedTurns: number, tokensBefore: number, tokensAfter: number, skipped: boolean }}
      */
     compact(history, options = {}) {
       if (!Array.isArray(history) || history.length === 0) {
-        return { compacted: history || [], prunedImages: 0, prunedDomSnapshots: 0, compactedTurns: 0 };
+        return { compacted: history || [], prunedImages: 0, prunedDomSnapshots: 0, compactedTurns: 0, tokensBefore: 0, tokensAfter: 0, skipped: true };
+      }
+
+      const tokenLimit = (typeof options.tokenLimit === 'number' && options.tokenLimit > 0) ? options.tokenLimit : 0;
+      const tokensBefore = this.estimateTokens(history);
+
+      // If tokenLimit is set and history is within budget, skip compaction
+      if (tokenLimit > 0 && tokensBefore <= tokenLimit && !options.force) {
+        this.sanitizeFunctionResponses(history);
+        return {
+          compacted: history,
+          prunedImages: 0,
+          prunedDomSnapshots: 0,
+          compactedTurns: 0,
+          tokensBefore,
+          tokensAfter: tokensBefore,
+          skipped: true
+        };
       }
 
       const maxRecentImages = options.maxRecentImages !== undefined ? options.maxRecentImages : 1;
@@ -153,7 +251,7 @@
       let prunedDomSnapshots = 0;
       let compactedTurns = 0;
 
-      // 1. Prune older screenshots (walk backwards from most recent)
+      // Stage 1: Prune older screenshots (walk backwards from most recent)
       let imagesSeen = 0;
       for (let i = history.length - 1; i >= 0; i--) {
         const item = history[i];
@@ -167,7 +265,6 @@
           if (part.inlineData) {
             imagesSeen++;
             if (imagesSeen > maxRecentImages) {
-              // Replace inlineData with text description so Gemini knows an image was analyzed
               delete part.inlineData;
               part.text = '[Previous viewport screenshot analyzed: visual layout and styling previously inspected]';
               prunedImages++;
@@ -191,18 +288,25 @@
               }
             }
           }
-
-          // Safety check: functionResponse.parts only supports binary inlineData in Gemini API; remove any invalid text parts
-          if (part.functionResponse && part.functionResponse.parts) {
-            part.functionResponse.parts = part.functionResponse.parts.filter(p => p && p.inlineData);
-            if (part.functionResponse.parts.length === 0) {
-              delete part.functionResponse.parts;
-            }
-          }
         }
       }
 
-      // 2. Deduplicate older DOM tree dumps (keep only the most recent one)
+      // Check if Stage 1 brought tokens below tokenLimit
+      if (tokenLimit > 0 && this.estimateTokens(history) <= tokenLimit && !options.force) {
+        this.sanitizeFunctionResponses(history);
+        const tokensAfter = this.estimateTokens(history);
+        return {
+          compacted: history,
+          prunedImages,
+          prunedDomSnapshots: 0,
+          compactedTurns: 0,
+          tokensBefore,
+          tokensAfter,
+          skipped: false
+        };
+      }
+
+      // Stage 2: Deduplicate older DOM tree dumps (keep only the most recent one)
       let domSnapshotSeen = 0;
       for (let i = history.length - 1; i >= 0; i--) {
         const item = history[i];
@@ -237,7 +341,22 @@
         }
       }
 
-      // 3. Sliding-window turn compaction
+      // Check if Stage 2 brought tokens below tokenLimit
+      if (tokenLimit > 0 && this.estimateTokens(history) <= tokenLimit && !options.force) {
+        this.sanitizeFunctionResponses(history);
+        const tokensAfter = this.estimateTokens(history);
+        return {
+          compacted: history,
+          prunedImages,
+          prunedDomSnapshots,
+          compactedTurns: 0,
+          tokensBefore,
+          tokensAfter,
+          skipped: false
+        };
+      }
+
+      // Stage 3: Sliding-window turn compaction
       // Keep initial user request (index 0) + most recent (maxRecentTurns * 2) entries
       const recentEntriesCount = maxRecentTurns * 2;
       if (history.length > recentEntriesCount + 2) {
@@ -260,11 +379,17 @@
         }
       }
 
+      this.sanitizeFunctionResponses(history);
+      const tokensAfter = this.estimateTokens(history);
+
       return {
         compacted: history,
         prunedImages,
         prunedDomSnapshots,
-        compactedTurns
+        compactedTurns,
+        tokensBefore,
+        tokensAfter,
+        skipped: false
       };
     }
   };
@@ -1143,7 +1268,7 @@
   async function getConfig() {
     if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
       try {
-        const data = await chrome.storage.local.get(['geminiApiKey', 'geminiModel', 'customInstructions', 'maxTurns', 'autoScreenshot', 'autoCompact', 'maxRecentImages']);
+        const data = await chrome.storage.local.get(['geminiApiKey', 'geminiModel', 'customInstructions', 'maxTurns', 'autoScreenshot', 'autoCompact', 'maxRecentImages', 'compactThreshold']);
         return {
           geminiApiKey: data.geminiApiKey || '',
           geminiModel: data.geminiModel || 'gemini-flash-latest',
@@ -1151,7 +1276,8 @@
           maxTurns: data.maxTurns || 15,
           autoScreenshot: data.autoScreenshot !== undefined ? data.autoScreenshot : true,
           autoCompact: data.autoCompact !== undefined ? data.autoCompact : true,
-          maxRecentImages: data.maxRecentImages || 1
+          maxRecentImages: data.maxRecentImages || 1,
+          compactThreshold: data.compactThreshold !== undefined ? parseInt(data.compactThreshold, 10) : 30000
         };
       } catch (e) {
         console.warn('chrome.storage error:', e);
@@ -1165,10 +1291,11 @@
         maxTurns: parseInt(localStorage.getItem('maxTurns'), 10) || 15,
         autoScreenshot: localStorage.getItem('autoScreenshot') !== 'false',
         autoCompact: localStorage.getItem('autoCompact') !== 'false',
-        maxRecentImages: parseInt(localStorage.getItem('maxRecentImages'), 10) || 1
+        maxRecentImages: parseInt(localStorage.getItem('maxRecentImages'), 10) || 1,
+        compactThreshold: parseInt(localStorage.getItem('compactThreshold'), 10) || 30000
       };
     } catch (e) {
-      return { geminiApiKey: '', geminiModel: 'gemini-flash-latest', customInstructions: '', maxTurns: 15, autoScreenshot: true, autoCompact: true, maxRecentImages: 1 };
+      return { geminiApiKey: '', geminiModel: 'gemini-flash-latest', customInstructions: '', maxTurns: 15, autoScreenshot: true, autoCompact: true, maxRecentImages: 1, compactThreshold: 30000 };
     }
   }
 
@@ -1470,18 +1597,22 @@ ${customInstructions ? 'User Custom Instructions: ' + customInstructions : ''}`
     while (turn < maxTurns) {
       turn++;
 
-      // Auto-Compact context if enabled
+      // Auto-Compact context if enabled and token limit exceeded
       if (config.autoCompact !== false) {
+        const tokenLimit = parseInt(config.compactThreshold, 10) || 30000;
         const compactRes = ContextCompactor.compact(conversationHistory, {
+          tokenLimit: tokenLimit,
           maxRecentImages: config.maxRecentImages || 1,
           maxRecentTurns: 6
         });
-        if (compactRes.prunedImages > 0 || compactRes.prunedDomSnapshots > 0 || compactRes.compactedTurns > 0) {
+        if (!compactRes.skipped && (compactRes.prunedImages > 0 || compactRes.prunedDomSnapshots > 0 || compactRes.compactedTurns > 0)) {
           const details = [];
           if (compactRes.prunedImages > 0) details.push(`pruned ${compactRes.prunedImages} older screenshot(s)`);
           if (compactRes.prunedDomSnapshots > 0) details.push(`pruned ${compactRes.prunedDomSnapshots} older DOM dump(s)`);
           if (compactRes.compactedTurns > 0) details.push(`compacted ${compactRes.compactedTurns} older turn(s)`);
-          appendToolStep(`⚡ Auto-compacted history: ${details.join(', ')} to optimize tokens.`);
+          const beforeStr = compactRes.tokensBefore ? ` (~${compactRes.tokensBefore.toLocaleString()} tokens exceeded ${tokenLimit.toLocaleString()} limit)` : '';
+          const afterStr = compactRes.tokensAfter ? ` (now ~${compactRes.tokensAfter.toLocaleString()} tokens)` : '';
+          appendToolStep(`⚡ Auto-compacted history${beforeStr}: ${details.join(', ')} to optimize context${afterStr}.`);
           if (currentTabId) saveTabSession(currentTabId);
         }
       }
