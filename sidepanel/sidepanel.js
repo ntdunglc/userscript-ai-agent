@@ -214,6 +214,148 @@
     },
 
     /**
+     * Sanitizes, repairs, and strictly enforces Gemini REST turn ordering and function-calling contracts:
+     * 1. Eliminates invalid or empty turns.
+     * 2. Sanitizes functionResponse.parts (removing invalid text parts).
+     * 3. Ensures strict alternation of 'user' and 'model' turns.
+     * 4. Ensures functionCall turns ONLY precede matching functionResponse turns; converts
+     *    unanswered / interrupted functionCalls into model text representations.
+     * 5. Converts orphaned functionResponses into user text representations.
+     * 6. Ensures history starts with 'user' and ends with 'user' before generateContent.
+     * @param {Array} history - Full conversation history array
+     * @returns {Array} Repaired history array
+     */
+    sanitizeAndRepairHistory(history) {
+      if (!Array.isArray(history) || history.length === 0) return history || [];
+
+      // Step 1: Clean parts and filter out empty / invalid entries
+      const cleaned = [];
+      for (const item of history) {
+        if (!item || !Array.isArray(item.parts) || item.parts.length === 0) continue;
+        const role = item.role === 'model' ? 'model' : 'user';
+        const parts = [];
+        for (const p of item.parts) {
+          if (!p) continue;
+          // Ensure functionResponse.parts only contains binary inlineData
+          if (p.functionResponse && p.functionResponse.parts) {
+            p.functionResponse.parts = p.functionResponse.parts.filter(sub => sub && sub.inlineData);
+            if (p.functionResponse.parts.length === 0) {
+              delete p.functionResponse.parts;
+            }
+          }
+          parts.push(p);
+        }
+        if (parts.length > 0) {
+          cleaned.push({ role, parts });
+        }
+      }
+
+      if (cleaned.length === 0) {
+        history.length = 0;
+        return history;
+      }
+
+      // Step 2: Ensure first turn has role: 'user'
+      while (cleaned.length > 0 && cleaned[0].role !== 'user') {
+        cleaned.shift();
+      }
+      if (cleaned.length === 0) {
+        history.length = 0;
+        return history;
+      }
+
+      // Step 3: Enforce strict role alternation ('user' <-> 'model')
+      const alternating = [];
+      for (let i = 0; i < cleaned.length; i++) {
+        const current = cleaned[i];
+        if (alternating.length === 0) {
+          alternating.push(current);
+          continue;
+        }
+
+        const prev = alternating[alternating.length - 1];
+        if (prev.role === current.role) {
+          if (current.role === 'user') {
+            const prevHasFnResponse = prev.parts.some(p => p && p.functionResponse);
+            const currHasFnResponse = current.parts.some(p => p && p.functionResponse);
+            // If previous was a tool response and current is user text/followup, insert acknowledging model turn
+            if (prevHasFnResponse && !currHasFnResponse) {
+              alternating.push({
+                role: 'model',
+                parts: [{ text: 'Tool results recorded. Proceeding with your next instruction.' }]
+              });
+              alternating.push(current);
+            } else {
+              // Both are standard user messages: merge parts into single user turn
+              prev.parts.push(...current.parts);
+            }
+          } else {
+            // Both are model turns: merge parts into single model turn
+            prev.parts.push(...current.parts);
+          }
+        } else {
+          alternating.push(current);
+        }
+      }
+
+      // Step 4: Validate functionCall and functionResponse pairing
+      // A functionCall in turn i (model) MUST be answered by turn i+1 (user with functionResponse).
+      // If not answered (e.g. user typed a follow-up or agent loop threw), convert functionCall to text.
+      for (let i = 0; i < alternating.length; i++) {
+        const item = alternating[i];
+        if (item.role === 'model') {
+          const fnCallParts = item.parts.filter(p => p && p.functionCall);
+          if (fnCallParts.length > 0) {
+            const nextTurn = alternating[i + 1];
+            const hasMatchingResponse = nextTurn && nextTurn.role === 'user' && nextTurn.parts.some(p => p && p.functionResponse);
+            if (!hasMatchingResponse) {
+              // Unanswered function call! Convert to text to prevent Gemini 400 error
+              for (const p of item.parts) {
+                if (p && p.functionCall) {
+                  const fnName = p.functionCall.name || 'tool';
+                  p.text = `[Model planned tool call "${fnName}", proceeding with latest instructions]`;
+                  delete p.functionCall;
+                }
+              }
+            }
+          }
+        } else if (item.role === 'user') {
+          const fnRespParts = item.parts.filter(p => p && p.functionResponse);
+          if (fnRespParts.length > 0) {
+            const prevTurn = alternating[i - 1];
+            const prevHasMatchingCall = prevTurn && prevTurn.role === 'model' && prevTurn.parts.some(p => p && p.functionCall);
+            if (!prevHasMatchingCall) {
+              // Orphaned function response without preceding call! Convert to text
+              for (const p of item.parts) {
+                if (p && p.functionResponse) {
+                  const fnName = p.functionResponse.name || 'tool';
+                  const respMsg = p.functionResponse.response ? JSON.stringify(p.functionResponse.response) : '';
+                  p.text = `[Tool result for "${fnName}": ${respMsg}]`;
+                  delete p.functionResponse;
+                }
+              }
+            }
+          }
+        }
+      }
+
+      // Step 5: Ensure last turn is 'user' before calling generateContent
+      if (alternating.length > 0 && alternating[alternating.length - 1].role === 'model') {
+        alternating.push({
+          role: 'user',
+          parts: [{ text: 'Please continue.' }]
+        });
+      }
+
+      // Mutate original history array in place
+      history.length = 0;
+      for (const item of alternating) {
+        history.push(item);
+      }
+      return history;
+    },
+
+    /**
      * Compacts conversation history when it exceeds a token limit:
      * 1. Checks if estimated tokens exceed options.tokenLimit (if provided).
      * 2. Stage 1: Strips heavy base64 image data from older turns, preserving recent screenshot(s).
@@ -228,12 +370,13 @@
         return { compacted: history || [], prunedImages: 0, prunedDomSnapshots: 0, compactedTurns: 0, tokensBefore: 0, tokensAfter: 0, skipped: true };
       }
 
+      this.sanitizeFunctionResponses(history);
+
       const tokenLimit = (typeof options.tokenLimit === 'number' && options.tokenLimit > 0) ? options.tokenLimit : 0;
       const tokensBefore = this.estimateTokens(history);
 
       // If tokenLimit is set and history is within budget, skip compaction
       if (tokenLimit > 0 && tokensBefore <= tokenLimit && !options.force) {
-        this.sanitizeFunctionResponses(history);
         return {
           compacted: history,
           prunedImages: 0,
@@ -360,21 +503,23 @@
       // Keep initial user request (index 0) + most recent (maxRecentTurns * 2) entries
       const recentEntriesCount = maxRecentTurns * 2;
       if (history.length > recentEntriesCount + 2) {
-        const intermediateCount = history.length - 1 - recentEntriesCount;
-        if (intermediateCount > 2) {
-          const summaryUser = {
-            role: 'user',
+        // Find safe boundary in recent entries starting with a user prompt (not a bare functionResponse)
+        let tailStartIndex = history.length - recentEntriesCount;
+        while (tailStartIndex < history.length - 2 &&
+               (history[tailStartIndex].role !== 'user' ||
+                (history[tailStartIndex].parts && history[tailStartIndex].parts.some(p => p && p.functionResponse)))) {
+          tailStartIndex++;
+        }
+
+        const intermediateCount = tailStartIndex - 1;
+        if (intermediateCount > 1) {
+          const summaryModel = {
+            role: 'model',
             parts: [{
               text: `[Context Compaction Summary: The agent previously completed ${Math.floor(intermediateCount / 2)} intermediate DOM analysis and script iteration steps. Relevant element selectors and script refinements have been incorporated. Current goal continues below.]`
             }]
           };
-          const summaryModel = {
-            role: 'model',
-            parts: [{
-              text: 'Understood. I will continue from the latest state and current page context.'
-            }]
-          };
-          history.splice(1, intermediateCount, summaryUser, summaryModel);
+          history.splice(1, intermediateCount, summaryModel);
           compactedTurns = intermediateCount;
         }
       }
@@ -412,6 +557,7 @@
     const session = await TabSessionManager.loadSession(tabId);
     if (session && session.feedHtml && session.conversationHistory) {
       conversationHistory = session.conversationHistory || [];
+      ContextCompactor.sanitizeAndRepairHistory(conversationHistory);
       messageQueue = session.messageQueue || [];
       if (messagesFeed) {
         messagesFeed.innerHTML = session.feedHtml;
@@ -1429,6 +1575,9 @@
       parts: userParts
     });
 
+    // Enforce valid Gemini turn sequence & repair any broken history from previous errors
+    ContextCompactor.sanitizeAndRepairHistory(conversationHistory);
+
     const systemInstruction = {
       parts: [
         {
@@ -1616,6 +1765,9 @@ ${customInstructions ? 'User Custom Instructions: ' + customInstructions : ''}`
           if (currentTabId) saveTabSession(currentTabId);
         }
       }
+
+      // Final sanity check and repair on conversationHistory before building requestBody
+      ContextCompactor.sanitizeAndRepairHistory(conversationHistory);
 
       const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`;
 

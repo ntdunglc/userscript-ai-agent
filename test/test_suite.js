@@ -757,6 +757,111 @@ console.log("imported directly!");`;
     assert.ok(res.tokensAfter < res.tokensBefore, 'Tokens after must be lower than tokens before');
   });
 
+  await test('ContextCompactor.sanitizeAndRepairHistory enforces strict role alternation and repairs function call sequences', () => {
+    const SidepanelModule = require('../sidepanel/sidepanel.js');
+    const compactor = SidepanelModule.ContextCompactor;
+
+    // Case 1: Interrupted function call followed by user "continue"
+    const interruptedHistory = [
+      { role: 'user', parts: [{ text: 'Make the header dark' }] },
+      {
+        role: 'model',
+        parts: [
+          { text: 'Inspecting...' },
+          { functionCall: { name: 'capture_screenshot', args: {} } }
+        ]
+      },
+      // User sent "continue" without a functionResponse!
+      { role: 'user', parts: [{ text: 'continue' }] }
+    ];
+
+    const repaired1 = compactor.sanitizeAndRepairHistory(interruptedHistory);
+    // Unanswered function call must be converted to text so Gemini does not expect a functionResponse
+    assert.strictEqual(repaired1[1].role, 'model');
+    assert.strictEqual(repaired1[1].parts.some(p => p.functionCall), false, 'Unanswered functionCall must be converted to text');
+    assert.ok(repaired1[1].parts.some(p => p.text && p.text.includes('Model planned tool call')), 'Must describe planned tool call');
+    assert.strictEqual(repaired1[2].role, 'user');
+    assert.strictEqual(repaired1[2].parts[0].text, 'continue');
+
+    // Case 2: User follow-up right after functionResponse (two consecutive user turns)
+    const consecutiveUserHistory = [
+      { role: 'user', parts: [{ text: 'Goal 1' }] },
+      { role: 'model', parts: [{ functionCall: { name: 'apply_userscript', args: { name: 'test', script: '1' } } }] },
+      { role: 'user', parts: [{ functionResponse: { name: 'apply_userscript', response: { status: 'ok' } } }] },
+      { role: 'user', parts: [{ text: 'continue' }] }
+    ];
+
+    const repaired2 = compactor.sanitizeAndRepairHistory(consecutiveUserHistory);
+    // Must insert an acknowledging model turn so roles strictly alternate: user -> model -> user -> model -> user
+    assert.strictEqual(repaired2.length, 5, 'Must insert acknowledging model turn');
+    assert.strictEqual(repaired2[0].role, 'user');
+    assert.strictEqual(repaired2[1].role, 'model');
+    assert.strictEqual(repaired2[2].role, 'user');
+    assert.strictEqual(repaired2[3].role, 'model', 'Must have intermediate model turn');
+    assert.strictEqual(repaired2[4].role, 'user');
+    assert.strictEqual(repaired2[4].parts[0].text, 'continue');
+
+    // Case 3: Orphaned functionResponse without preceding functionCall
+    const orphanedHistory = [
+      { role: 'user', parts: [{ text: 'Prompt' }] },
+      { role: 'model', parts: [{ text: 'Just regular text, no functionCall' }] },
+      { role: 'user', parts: [{ functionResponse: { name: 'inspect_dom', response: { result: '42' } } }] }
+    ];
+
+    const repaired3 = compactor.sanitizeAndRepairHistory(orphanedHistory);
+    assert.strictEqual(repaired3[2].parts.some(p => p.functionResponse), false, 'Orphaned functionResponse must be converted to text');
+    assert.ok(repaired3[2].parts.some(p => p.text && p.text.includes('Tool result for "inspect_dom"')), 'Must convert to text representation');
+  });
+
+  await test('ContextCompactor Stage 3 turn compaction maintains strict user-model alternation and valid function call placement', () => {
+    const SidepanelModule = require('../sidepanel/sidepanel.js');
+    const compactor = SidepanelModule.ContextCompactor;
+
+    // Build multi-turn ReAct history with tool calls
+    const mockHistory = [
+      { role: 'user', parts: [{ text: 'Initial Goal: Redesign page header' }] }
+    ];
+
+    for (let i = 1; i <= 6; i++) {
+      mockHistory.push({
+        role: 'model',
+        parts: [
+          { text: `Executing step ${i}` },
+          { functionCall: { name: 'inspect_dom', args: { script: `document.querySelectorAll('.item_${i}').length` } } }
+        ]
+      });
+      mockHistory.push({
+        role: 'user',
+        parts: [
+          { functionResponse: { name: 'inspect_dom', response: { count: i } } }
+        ]
+      });
+      mockHistory.push({
+        role: 'model',
+        parts: [{ text: `Step ${i} complete.` }]
+      });
+      mockHistory.push({
+        role: 'user',
+        parts: [{ text: `Now proceed with step ${i + 1}` }]
+      });
+    }
+
+    const res = compactor.compact(mockHistory, { maxRecentTurns: 3, tokenLimit: 0, force: true });
+    assert.ok(res.compactedTurns > 0, 'Must compact intermediate turns');
+
+    // Verify strict role alternation across the entire compacted history
+    for (let i = 0; i < res.compacted.length; i++) {
+      const expectedRole = i % 2 === 0 ? 'user' : 'model';
+      assert.strictEqual(res.compacted[i].role, expectedRole, `Turn ${i} must have role "${expectedRole}"`);
+
+      // Verify every functionCall turn only comes after a user turn
+      if (res.compacted[i].role === 'model' && res.compacted[i].parts.some(p => p.functionCall)) {
+        assert.ok(i > 0, 'Function call turn cannot be first turn');
+        assert.strictEqual(res.compacted[i - 1].role, 'user', 'Function call turn must come immediately after a user turn');
+      }
+    }
+  });
+
   console.log(`\n========================================`);
   console.log(`Test Results: ${passed} passed, ${failed} failed`);
   console.log(`========================================\n`);
