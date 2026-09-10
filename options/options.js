@@ -159,14 +159,13 @@ function restoreOptions() {
       const gemModel = items.geminiModel || 'gemini-flash-latest';
       const standardGemOptions = [
         'gemini-flash-latest',
-        'gemini-3.5-flash-lite',
-        'gemini-2.5-flash-lite',
-        'gemini-2.0-flash-lite',
-        'gemini-3.8-flash',
+        'gemini-2.5-pro',
         'gemini-2.5-flash',
+        'gemini-2.5-flash-lite',
         'gemini-2.0-flash',
-        'gemini-1.5-flash',
-        'gemini-1.5-pro'
+        'gemini-2.0-flash-lite',
+        'gemini-3.5-flash-lite',
+        'gemini-3.8-flash'
       ];
 
       if (modelSelect) {
@@ -191,16 +190,23 @@ function restoreOptions() {
       }
       const orModel = items.openrouterModel || 'anthropic/claude-3.7-sonnet';
       const standardOrOptions = [
+        'deepseek/deepseek-v4.1-flash',
         'anthropic/claude-3.7-sonnet',
+        'anthropic/claude-3.7-sonnet:thinking',
         'anthropic/claude-3.5-sonnet',
         'anthropic/claude-3.5-haiku',
         'openai/gpt-4o',
+        'openai/o3-mini',
         'openai/gpt-4o-mini',
         'deepseek/deepseek-chat',
         'deepseek/deepseek-r1',
+        'google/gemini-2.5-pro',
+        'google/gemini-2.5-flash',
         'google/gemini-2.0-flash-001',
+        'mistralai/codestral-2501',
         'meta-llama/llama-3.3-70b-instruct',
-        'qwen/qwen-2.5-72b-instruct'
+        'qwen/qwen-2.5-72b-instruct',
+        'qwen/qwen-2.5-coder-32b-instruct'
       ];
 
       if (openrouterModelSelect) {

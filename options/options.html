@@ -58,24 +58,23 @@
           <label for="modelSelect">Gemini Model</label>
           <select id="modelSelect" name="modelSelect">
             <option value="gemini-flash-latest">Gemini Flash Latest (Auto-updates to latest)</option>
-            <option value="gemini-3.5-flash-lite">Gemini 3.5 Flash-Lite</option>
-            <option value="gemini-2.5-flash-lite">Gemini 2.5 Flash-Lite</option>
-            <option value="gemini-2.0-flash-lite">Gemini 2.0 Flash-Lite</option>
-            <option value="gemini-3.8-flash">Gemini 3.8 Flash</option>
+            <option value="gemini-2.5-pro">Gemini 2.5 Pro</option>
             <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
+            <option value="gemini-2.5-flash-lite">Gemini 2.5 Flash-Lite</option>
             <option value="gemini-2.0-flash">Gemini 2.0 Flash</option>
-            <option value="gemini-1.5-flash">Gemini 1.5 Flash</option>
-            <option value="gemini-1.5-pro">Gemini 1.5 Pro</option>
+            <option value="gemini-2.0-flash-lite">Gemini 2.0 Flash-Lite</option>
+            <option value="gemini-3.5-flash-lite">Gemini 3.5 Flash-Lite</option>
+            <option value="gemini-3.8-flash">Gemini 3.8 Flash</option>
             <option value="custom">Custom Model Name...</option>
           </select>
           <input 
             type="text" 
             id="customModelInput" 
-            placeholder="Enter model name, e.g. gemini-3.5-flash-lite, gemini-3.8-flash" 
+            placeholder="Enter model name, e.g. gemini-2.5-pro, gemini-2.5-flash" 
             style="margin-top: 8px; display: none;" 
           />
           <p class="help-text">
-            Choose "Gemini 3.5 Flash-Lite", "Gemini Flash Latest", "Gemini 3.8 Flash", or enter a custom model name.
+            Choose "Gemini Flash Latest", "Gemini 2.5 Pro", "Gemini 2.5 Flash", or enter a custom model name.
           </p>
         </div>
       </div>
@@ -96,7 +95,7 @@
             <button type="button" id="toggleOpenrouterApiKey" class="btn-secondary" title="Show / Hide Key">Show</button>
           </div>
           <p class="help-text">
-            An OpenRouter API key gives access to Claude 3.7, Claude 3.5 Sonnet, GPT-4o, DeepSeek, and 200+ models.
+            An OpenRouter API key gives access to Claude 3.7, DeepSeek V4.1 Flash, GPT-4o, and 200+ models.
             <a href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer">Get an API key from OpenRouter</a>.
           </p>
           <p class="help-text privacy-note">
@@ -107,26 +106,33 @@
         <div class="form-group">
           <label for="openrouterModelSelect">OpenRouter Model</label>
           <select id="openrouterModelSelect" name="openrouterModelSelect">
+            <option value="deepseek/deepseek-v4.1-flash">DeepSeek V4.1 Flash (DeepSeek)</option>
             <option value="anthropic/claude-3.7-sonnet">Claude 3.7 Sonnet (Anthropic)</option>
+            <option value="anthropic/claude-3.7-sonnet:thinking">Claude 3.7 Sonnet Thinking (Anthropic)</option>
             <option value="anthropic/claude-3.5-sonnet">Claude 3.5 Sonnet (Anthropic)</option>
             <option value="anthropic/claude-3.5-haiku">Claude 3.5 Haiku (Anthropic)</option>
             <option value="openai/gpt-4o">GPT-4o (OpenAI)</option>
+            <option value="openai/o3-mini">o3-mini (OpenAI)</option>
             <option value="openai/gpt-4o-mini">GPT-4o mini (OpenAI)</option>
             <option value="deepseek/deepseek-chat">DeepSeek V3 (DeepSeek)</option>
             <option value="deepseek/deepseek-r1">DeepSeek R1 (DeepSeek)</option>
+            <option value="google/gemini-2.5-pro">Gemini 2.5 Pro (Google via OpenRouter)</option>
+            <option value="google/gemini-2.5-flash">Gemini 2.5 Flash (Google via OpenRouter)</option>
             <option value="google/gemini-2.0-flash-001">Gemini 2.0 Flash (Google via OpenRouter)</option>
+            <option value="mistralai/codestral-2501">Codestral 2501 (Mistral AI)</option>
             <option value="meta-llama/llama-3.3-70b-instruct">Llama 3.3 70B Instruct (Meta)</option>
             <option value="qwen/qwen-2.5-72b-instruct">Qwen 2.5 72B Instruct (Alibaba)</option>
+            <option value="qwen/qwen-2.5-coder-32b-instruct">Qwen 2.5 Coder 32B (Alibaba)</option>
             <option value="custom">Custom OpenRouter Model ID...</option>
           </select>
           <input 
             type="text" 
             id="customOpenrouterModelInput" 
-            placeholder="Enter OpenRouter model ID, e.g. anthropic/claude-3.7-sonnet:beta" 
+            placeholder="Enter OpenRouter model ID, e.g. deepseek/deepseek-v4.1-flash" 
             style="margin-top: 8px; display: none;" 
           />
           <p class="help-text">
-            Choose Claude 3.7 Sonnet, GPT-4o, DeepSeek V3, or specify any model ID from <a href="https://openrouter.ai/models" target="_blank" rel="noopener noreferrer">OpenRouter Models</a>.
+            Choose DeepSeek V4.1 Flash, Claude 3.7 Sonnet, GPT-4o, or specify any model ID from <a href="https://openrouter.ai/models" target="_blank" rel="noopener noreferrer">OpenRouter Models</a>.
           </p>
         </div>
       </div>

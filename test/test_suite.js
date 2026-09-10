@@ -872,7 +872,7 @@ console.log("imported directly!");`;
     assert.ok(manifest.host_permissions.includes('https://openrouter.ai/*'), 'Must include openrouter host permission');
   });
 
-  await test('options.html includes AI provider selector and OpenRouter configuration fields', () => {
+  await test('options.html includes AI provider selector, OpenRouter fields, and updated models', () => {
     const optionsHtml = fs.readFileSync(path.join(ROOT_DIR, 'options/options.html'), 'utf8');
     assert.ok(optionsHtml.includes('id="aiProviderSelect"'), 'Must have aiProviderSelect');
     assert.ok(optionsHtml.includes('id="geminiSection"'), 'Must have geminiSection');
@@ -881,22 +881,28 @@ console.log("imported directly!");`;
     assert.ok(optionsHtml.includes('id="toggleOpenrouterApiKey"'), 'Must have toggleOpenrouterApiKey');
     assert.ok(optionsHtml.includes('id="openrouterModelSelect"'), 'Must have openrouterModelSelect');
     assert.ok(optionsHtml.includes('id="customOpenrouterModelInput"'), 'Must have customOpenrouterModelInput');
+    assert.ok(optionsHtml.includes('deepseek/deepseek-v4.1-flash'), 'Must include DeepSeek V4.1 Flash in OpenRouter options');
+    assert.ok(optionsHtml.includes('gemini-2.5-pro'), 'Must include Gemini 2.5 Pro in Gemini options');
   });
 
-  await test('options.js supports OpenRouter connection testing and model resolution', () => {
+  await test('options.js supports OpenRouter connection testing and updated model resolution', () => {
     const optionsJs = fs.readFileSync(path.join(ROOT_DIR, 'options/options.js'), 'utf8');
     assert.ok(optionsJs.includes('openrouter.ai/api/v1/chat/completions'), 'Must reference OpenRouter completions endpoint');
     assert.ok(optionsJs.includes('openrouterApiKey'), 'Must manage openrouterApiKey');
     assert.ok(optionsJs.includes('openrouterModel'), 'Must manage openrouterModel');
     assert.ok(optionsJs.includes('getEffectiveOpenRouterModel'), 'Must implement getEffectiveOpenRouterModel');
+    assert.ok(optionsJs.includes("'deepseek/deepseek-v4.1-flash'"), 'Must include deepseek/deepseek-v4.1-flash in standardOrOptions');
+    assert.ok(optionsJs.includes("'gemini-2.5-pro'"), 'Must include gemini-2.5-pro in standardGemOptions');
   });
 
-  await test('sidepanel.html includes OpenRouter optgroup in quickModelSelect', () => {
+  await test('sidepanel.html includes OpenRouter optgroup and modern models in quickModelSelect', () => {
     const sidepanelHtml = fs.readFileSync(path.join(ROOT_DIR, 'sidepanel/sidepanel.html'), 'utf8');
     assert.ok(sidepanelHtml.includes('optgroup label="OpenRouter"'), 'Must have OpenRouter optgroup');
     assert.ok(sidepanelHtml.includes('anthropic/claude-3.7-sonnet'), 'Must include Claude 3.7 Sonnet');
     assert.ok(sidepanelHtml.includes('openai/gpt-4o'), 'Must include GPT-4o');
     assert.ok(sidepanelHtml.includes('deepseek/deepseek-chat'), 'Must include DeepSeek V3');
+    assert.ok(sidepanelHtml.includes('deepseek/deepseek-v4.1-flash'), 'Must include DeepSeek V4.1 Flash');
+    assert.ok(sidepanelHtml.includes('gemini-2.5-pro'), 'Must include Gemini 2.5 Pro');
   });
 
   await test('OpenRouterAdapter is exported and available in SidepanelModule', () => {

@@ -32,7 +32,7 @@
       opt.value = model;
       opt.textContent = model.length > 18 ? model.substring(0, 18) + '…' : model;
       const orGroup = quickModelSelect.querySelector('optgroup[label="OpenRouter"]');
-      if (orGroup && (model.includes('/') || model.startsWith('claude') || model.startsWith('gpt') || model.startsWith('deepseek') || model.startsWith('qwen') || model.startsWith('meta-llama'))) {
+      if (orGroup && (model.includes('/') || model.startsWith('claude') || model.startsWith('gpt') || model.startsWith('deepseek') || model.startsWith('qwen') || model.startsWith('meta-llama') || model.startsWith('mistral') || model.startsWith('codestral') || model.startsWith('o3') || model.startsWith('google/'))) {
         orGroup.appendChild(opt);
       } else {
         quickModelSelect.appendChild(opt);
@@ -1089,7 +1089,10 @@
           selectedModel.startsWith('gpt') ||
           selectedModel.startsWith('deepseek') ||
           selectedModel.startsWith('qwen') ||
-          selectedModel.startsWith('meta-llama');
+          selectedModel.startsWith('meta-llama') ||
+          selectedModel.startsWith('mistral') ||
+          selectedModel.startsWith('codestral') ||
+          selectedModel.startsWith('o3');
         const provider = isOpenRouter ? 'openrouter' : 'gemini';
 
         const updateData = { aiProvider: provider };
