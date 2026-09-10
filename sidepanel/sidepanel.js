@@ -30,8 +30,13 @@
     if (!found && model) {
       const opt = document.createElement('option');
       opt.value = model;
-      opt.textContent = model.length > 16 ? model.substring(0, 16) + '…' : model;
-      quickModelSelect.appendChild(opt);
+      opt.textContent = model.length > 18 ? model.substring(0, 18) + '…' : model;
+      const orGroup = quickModelSelect.querySelector('optgroup[label="OpenRouter"]');
+      if (orGroup && (model.includes('/') || model.startsWith('claude') || model.startsWith('gpt') || model.startsWith('deepseek') || model.startsWith('qwen') || model.startsWith('meta-llama'))) {
+        orGroup.appendChild(opt);
+      } else {
+        quickModelSelect.appendChild(opt);
+      }
       quickModelSelect.value = model;
     }
   }
@@ -539,6 +544,253 @@
     }
   };
 
+  /**
+   * OpenRouter & OpenAI-compatible Chat Completions Adapter
+   * Translates between canonical Gemini/Page-Agent format and OpenRouter Chat Completions schema.
+   */
+  const OpenRouterAdapter = {
+    /**
+     * Recursively convert Gemini schema type strings (e.g. OBJECT, STRING, ARRAY, BOOLEAN)
+     * to standard JSON Schema lowercase types (object, string, array, boolean, number, integer).
+     */
+    convertGeminiSchemaToOpenAi(schema) {
+      if (!schema || typeof schema !== 'object') return schema;
+      if (Array.isArray(schema)) {
+        return schema.map((item) => this.convertGeminiSchemaToOpenAi(item));
+      }
+      const converted = {};
+      for (const [k, v] of Object.entries(schema)) {
+        if (k === 'type' && typeof v === 'string') {
+          converted[k] = v.toLowerCase();
+        } else if (typeof v === 'object' && v !== null) {
+          converted[k] = this.convertGeminiSchemaToOpenAi(v);
+        } else {
+          converted[k] = v;
+        }
+      }
+      return converted;
+    },
+
+    /**
+     * Converts Gemini tools array ([{ function_declarations: [...] }])
+     * into OpenAI Chat Completions tools array ([{ type: 'function', function: { name, description, parameters } }]).
+     */
+    formatTools(geminiTools) {
+      if (!Array.isArray(geminiTools)) return [];
+      const openAiTools = [];
+      for (const group of geminiTools) {
+        if (group && Array.isArray(group.function_declarations)) {
+          for (const decl of group.function_declarations) {
+            if (!decl || !decl.name) continue;
+            openAiTools.push({
+              type: 'function',
+              function: {
+                name: decl.name,
+                description: decl.description || '',
+                parameters: this.convertGeminiSchemaToOpenAi(decl.parameters) || { type: 'object', properties: {} }
+              }
+            });
+          }
+        }
+      }
+      return openAiTools;
+    },
+
+    /**
+     * Converts canonical conversation history and system instruction into OpenAI-compatible messages.
+     * Handles text, images, tool calls, and tool responses.
+     */
+    formatMessages(history, systemInstruction = null) {
+      const messages = [];
+
+      // 1. System Prompt
+      if (systemInstruction) {
+        let systemText = '';
+        if (typeof systemInstruction === 'string') {
+          systemText = systemInstruction;
+        } else if (systemInstruction.parts && Array.isArray(systemInstruction.parts)) {
+          systemText = systemInstruction.parts.map((p) => p.text || '').join('\n');
+        }
+        if (systemText.trim()) {
+          messages.push({
+            role: 'system',
+            content: systemText.trim()
+          });
+        }
+      }
+
+      if (!Array.isArray(history)) return messages;
+
+      // Track assistant tool calls to match with tool response turns
+      let lastAssistantToolCalls = [];
+
+      for (let turnIdx = 0; turnIdx < history.length; turnIdx++) {
+        const turn = history[turnIdx];
+        if (!turn || !Array.isArray(turn.parts) || turn.parts.length === 0) continue;
+
+        if (turn.role === 'model') {
+          // Assistant turn
+          const textParts = turn.parts.filter((p) => p && p.text).map((p) => p.text).join('\n');
+          const callParts = turn.parts.filter((p) => p && p.functionCall).map((p) => p.functionCall);
+
+          const assistantMsg = {
+            role: 'assistant'
+          };
+
+          if (textParts) {
+            assistantMsg.content = textParts;
+          } else if (callParts.length > 0) {
+            assistantMsg.content = null;
+          } else {
+            assistantMsg.content = '';
+          }
+
+          if (callParts.length > 0) {
+            assistantMsg.tool_calls = callParts.map((call, idx) => {
+              const callId = call.id || `call_${call.name}_${turnIdx}_${idx}`;
+              let argsStr = '{}';
+              if (typeof call.args === 'string') {
+                argsStr = call.args;
+              } else if (typeof call.args === 'object' && call.args !== null) {
+                argsStr = JSON.stringify(call.args);
+              }
+              return {
+                id: callId,
+                type: 'function',
+                function: {
+                  name: call.name,
+                  arguments: argsStr
+                }
+              };
+            });
+            lastAssistantToolCalls = assistantMsg.tool_calls;
+          } else {
+            lastAssistantToolCalls = [];
+          }
+
+          messages.push(assistantMsg);
+        } else {
+          // User turn or Tool Response turn
+          const fnResponses = turn.parts.filter((p) => p && p.functionResponse).map((p) => p.functionResponse);
+
+          if (fnResponses.length > 0) {
+            // Tool response turn: emit individual role: 'tool' messages
+            const screenshotImages = [];
+
+            for (let idx = 0; idx < fnResponses.length; idx++) {
+              const fnResp = fnResponses[idx];
+              const matchedCall = lastAssistantToolCalls[idx];
+              const toolCallId = fnResp.callId || (matchedCall ? matchedCall.id : `call_${fnResp.name}_${turnIdx - 1}_${idx}`);
+
+              const cleanResp = Object.assign({}, fnResp.response || {});
+              if (cleanResp.inlineData) {
+                if (cleanResp.inlineData.data) {
+                  screenshotImages.push({
+                    mimeType: cleanResp.inlineData.mimeType || 'image/jpeg',
+                    data: cleanResp.inlineData.data
+                  });
+                }
+                delete cleanResp.inlineData;
+                cleanResp.screenshotCaptured = true;
+              }
+
+              messages.push({
+                role: 'tool',
+                tool_call_id: toolCallId,
+                name: fnResp.name,
+                content: JSON.stringify(cleanResp)
+              });
+            }
+
+            // If any tool response captured screenshot, provide as follow-up user turn with image_url
+            if (screenshotImages.length > 0) {
+              for (const img of screenshotImages) {
+                messages.push({
+                  role: 'user',
+                  content: [
+                    {
+                      type: 'text',
+                      text: 'Active tab viewport screenshot captured for visual analysis:'
+                    },
+                    {
+                      type: 'image_url',
+                      image_url: {
+                        url: `data:${img.mimeType};base64,${img.data}`
+                      }
+                    }
+                  ]
+                });
+              }
+            }
+          } else {
+            // Standard user message (text and/or image)
+            const contentParts = [];
+            for (const p of turn.parts) {
+              if (p && p.text) {
+                contentParts.push({ type: 'text', text: p.text });
+              }
+              if (p && p.inlineData && p.inlineData.data) {
+                contentParts.push({
+                  type: 'image_url',
+                  image_url: {
+                    url: `data:${p.inlineData.mimeType || 'image/jpeg'};base64,${p.inlineData.data}`
+                  }
+                });
+              }
+            }
+
+            if (contentParts.length === 1 && contentParts[0].type === 'text') {
+              messages.push({ role: 'user', content: contentParts[0].text });
+            } else if (contentParts.length > 0) {
+              messages.push({ role: 'user', content: contentParts });
+            }
+          }
+        }
+      }
+
+      return messages;
+    },
+
+    /**
+     * Parses OpenRouter Chat Completions response JSON into text and function calls.
+     */
+    parseResponse(json) {
+      const choice = json?.choices?.[0];
+      const message = choice?.message;
+      if (!message) {
+        return { text: '', functionCalls: [] };
+      }
+
+      const text = message.content || '';
+      const functionCalls = [];
+
+      if (Array.isArray(message.tool_calls) && message.tool_calls.length > 0) {
+        for (const tc of message.tool_calls) {
+          if (!tc || !tc.function || !tc.function.name) continue;
+          let parsedArgs = {};
+          if (typeof tc.function.arguments === 'string') {
+            try {
+              parsedArgs = JSON.parse(tc.function.arguments);
+            } catch (e) {
+              console.warn('Failed to parse tool call arguments:', tc.function.arguments);
+              parsedArgs = {};
+            }
+          } else if (typeof tc.function.arguments === 'object' && tc.function.arguments !== null) {
+            parsedArgs = tc.function.arguments;
+          }
+
+          functionCalls.push({
+            id: tc.id || `call_${tc.function.name}_${Date.now()}`,
+            name: tc.function.name,
+            args: parsedArgs
+          });
+        }
+      }
+
+      return { text, functionCalls };
+    }
+  };
+
   async function saveTabSession(tabId) {
     const id = tabId || currentTabId;
     if (!id) return;
@@ -824,24 +1076,51 @@
 
     // Quick Model dropdown sync
     const currentConfig = await getConfig();
-    setQuickModelUI(currentConfig.geminiModel || 'gemini-flash-latest');
+    const activeModel = currentConfig.aiProvider === 'openrouter'
+      ? (currentConfig.openrouterModel || 'anthropic/claude-3.7-sonnet')
+      : (currentConfig.geminiModel || 'gemini-flash-latest');
+    setQuickModelUI(activeModel);
 
     if (quickModelSelect) {
       quickModelSelect.addEventListener('change', async (e) => {
         const selectedModel = e.target.value;
-        if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
-          await chrome.storage.local.set({ geminiModel: selectedModel });
+        const isOpenRouter = selectedModel.includes('/') ||
+          selectedModel.startsWith('claude') ||
+          selectedModel.startsWith('gpt') ||
+          selectedModel.startsWith('deepseek') ||
+          selectedModel.startsWith('qwen') ||
+          selectedModel.startsWith('meta-llama');
+        const provider = isOpenRouter ? 'openrouter' : 'gemini';
+
+        const updateData = { aiProvider: provider };
+        if (provider === 'openrouter') {
+          updateData.openrouterModel = selectedModel;
         } else {
-          localStorage.setItem('geminiModel', selectedModel);
+          updateData.geminiModel = selectedModel;
         }
-        appendToolStep(`Switched active model to: ${selectedModel}`);
+
+        if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+          await chrome.storage.local.set(updateData);
+        } else {
+          localStorage.setItem('aiProvider', provider);
+          if (provider === 'openrouter') {
+            localStorage.setItem('openrouterModel', selectedModel);
+          } else {
+            localStorage.setItem('geminiModel', selectedModel);
+          }
+        }
+        const providerLabel = provider === 'openrouter' ? 'OpenRouter' : 'Google Gemini';
+        appendToolStep(`Switched active model to: ${selectedModel} (${providerLabel})`);
       });
     }
 
     if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.onChanged) {
       chrome.storage.onChanged.addListener((changes, area) => {
-        if (area === 'local' && changes.geminiModel && changes.geminiModel.newValue) {
-          setQuickModelUI(changes.geminiModel.newValue);
+        if (area === 'local' && (changes.geminiModel || changes.openrouterModel || changes.aiProvider)) {
+          getConfig().then((cfg) => {
+            const active = cfg.aiProvider === 'openrouter' ? cfg.openrouterModel : cfg.geminiModel;
+            setQuickModelUI(active);
+          });
         }
       });
     }
@@ -1414,10 +1693,26 @@
   async function getConfig() {
     if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
       try {
-        const data = await chrome.storage.local.get(['geminiApiKey', 'geminiModel', 'customInstructions', 'maxTurns', 'autoScreenshot', 'autoCompact', 'maxRecentImages', 'compactThreshold']);
+        const data = await chrome.storage.local.get([
+          'aiProvider',
+          'geminiApiKey',
+          'geminiModel',
+          'openrouterApiKey',
+          'openrouterModel',
+          'customInstructions',
+          'maxTurns',
+          'autoScreenshot',
+          'autoCompact',
+          'maxRecentImages',
+          'compactThreshold'
+        ]);
+        const aiProvider = data.aiProvider || (data.openrouterApiKey && !data.geminiApiKey ? 'openrouter' : 'gemini');
         return {
+          aiProvider: aiProvider,
           geminiApiKey: data.geminiApiKey || '',
           geminiModel: data.geminiModel || 'gemini-flash-latest',
+          openrouterApiKey: data.openrouterApiKey || '',
+          openrouterModel: data.openrouterModel || 'anthropic/claude-3.7-sonnet',
           customInstructions: data.customInstructions || '',
           maxTurns: data.maxTurns || 15,
           autoScreenshot: data.autoScreenshot !== undefined ? data.autoScreenshot : true,
@@ -1430,9 +1725,16 @@
       }
     }
     try {
+      const storedProvider = localStorage.getItem('aiProvider');
+      const orKey = localStorage.getItem('openrouterApiKey') || '';
+      const gemKey = localStorage.getItem('geminiApiKey') || '';
+      const aiProvider = storedProvider || (orKey && !gemKey ? 'openrouter' : 'gemini');
       return {
-        geminiApiKey: localStorage.getItem('geminiApiKey') || '',
+        aiProvider: aiProvider,
+        geminiApiKey: gemKey,
         geminiModel: localStorage.getItem('geminiModel') || 'gemini-flash-latest',
+        openrouterApiKey: orKey,
+        openrouterModel: localStorage.getItem('openrouterModel') || 'anthropic/claude-3.7-sonnet',
         customInstructions: localStorage.getItem('customInstructions') || '',
         maxTurns: parseInt(localStorage.getItem('maxTurns'), 10) || 15,
         autoScreenshot: localStorage.getItem('autoScreenshot') !== 'false',
@@ -1441,7 +1743,19 @@
         compactThreshold: parseInt(localStorage.getItem('compactThreshold'), 10) || 30000
       };
     } catch (e) {
-      return { geminiApiKey: '', geminiModel: 'gemini-flash-latest', customInstructions: '', maxTurns: 15, autoScreenshot: true, autoCompact: true, maxRecentImages: 1, compactThreshold: 30000 };
+      return {
+        aiProvider: 'gemini',
+        geminiApiKey: '',
+        geminiModel: 'gemini-flash-latest',
+        openrouterApiKey: '',
+        openrouterModel: 'anthropic/claude-3.7-sonnet',
+        customInstructions: '',
+        maxTurns: 15,
+        autoScreenshot: true,
+        autoCompact: true,
+        maxRecentImages: 1,
+        compactThreshold: 30000
+      };
     }
   }
 
@@ -1478,8 +1792,11 @@
 
     // Check API configuration
     const config = await getConfig();
-    if (!config || !config.geminiApiKey) {
-      appendAssistantMessage('⚠️ **Gemini API Key missing!** Please configure your API key in Settings to chat with the agent.<br/><button class="action-btn primary" id="openSettingsFromChatBtn" style="margin-top: 8px;">⚙️ Open Settings</button>');
+    const isOr = config.aiProvider === 'openrouter';
+    const activeKey = isOr ? config.openrouterApiKey : config.geminiApiKey;
+    if (!config || !activeKey) {
+      const missingName = isOr ? 'OpenRouter' : 'Gemini';
+      appendAssistantMessage(`⚠️ **${missingName} API Key missing!** Please configure your ${missingName} API key in Settings to chat with the agent.<br/><button class="action-btn primary" id="openSettingsFromChatBtn" style="margin-top: 8px;">⚙️ Open Settings</button>`);
       const btn = document.getElementById('openSettingsFromChatBtn');
       if (btn) {
         btn.addEventListener('click', () => {
@@ -1522,8 +1839,11 @@
    * Main ReAct / Tool-Calling Agent Loop
    */
   async function runAgentLoop(userPrompt, config, userScreenshot = null) {
-    const apiKey = config.geminiApiKey;
-    const model = config.geminiModel || 'gemini-flash-latest';
+    const isOpenRouter = config.aiProvider === 'openrouter';
+    const apiKey = isOpenRouter ? config.openrouterApiKey : config.geminiApiKey;
+    const model = isOpenRouter
+      ? (config.openrouterModel || 'anthropic/claude-3.7-sonnet')
+      : (config.geminiModel || 'gemini-flash-latest');
     const customInstructions = config.customInstructions || '';
     const requestTabId = activeTab?.id;
     const requestTabUrl = activeTab?.url || '';
@@ -1769,36 +2089,125 @@ ${customInstructions ? 'User Custom Instructions: ' + customInstructions : ''}`
       // Final sanity check and repair on conversationHistory before building requestBody
       ContextCompactor.sanitizeAndRepairHistory(conversationHistory);
 
-      const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`;
+      let parts = [];
+      let functionCalls = [];
+      let textParts = '';
 
-      const requestBody = {
-        contents: conversationHistory,
-        systemInstruction: systemInstruction,
-        tools: tools,
-        generationConfig: {
+      if (isOpenRouter) {
+        const openAiMessages = OpenRouterAdapter.formatMessages(conversationHistory, systemInstruction);
+        const openAiTools = OpenRouterAdapter.formatTools(tools);
+
+        const requestBody = {
+          model: model,
+          messages: openAiMessages,
+          tools: openAiTools,
           temperature: 0.2
-        }
-      };
+        };
 
-      let response;
-      try {
-        response = await fetch(endpoint, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(requestBody),
-          signal: AbortSignal.timeout(60000)
+        let response;
+        try {
+          response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${apiKey}`,
+              'HTTP-Referer': 'https://github.com/ntdunglc/userscript-ai-agent',
+              'X-Title': 'Userscript AI Agent'
+            },
+            body: JSON.stringify(requestBody),
+            signal: AbortSignal.timeout(60000)
+          });
+        } catch (fetchErr) {
+          if (fetchErr.name === 'TimeoutError' || fetchErr.name === 'AbortError') {
+            throw new Error(`OpenRouter API request timed out (60s) for model ${model}.`);
+          }
+          throw fetchErr;
+        }
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          let errorJson = null;
+          try { errorJson = JSON.parse(errorText); } catch (e) {}
+          const msg = errorJson?.error?.message || errorText;
+          if (response.status === 401) {
+            throw new Error(`OpenRouter API Key invalid or expired (401): ${msg}`);
+          } else if (response.status === 402) {
+            throw new Error(`OpenRouter account has insufficient credits (402): ${msg}. Please add credits at openrouter.ai/credits.`);
+          } else if (response.status === 429) {
+            throw new Error(`OpenRouter rate limit or provider capacity reached (429): ${msg}`);
+          }
+          throw new Error(`OpenRouter API error (${response.status}): ${msg}`);
+        }
+
+        const data = await response.json();
+        const choice = data.choices?.[0];
+        if (!choice || !choice.message) {
+          appendAssistantMessage('⚠️ Received empty response from OpenRouter.');
+          break;
+        }
+
+        const parsed = OpenRouterAdapter.parseResponse(data);
+        const modelParts = [];
+        if (parsed.text) {
+          modelParts.push({ text: parsed.text });
+        }
+        for (const fc of parsed.functionCalls) {
+          modelParts.push({
+            functionCall: {
+              id: fc.id,
+              name: fc.name,
+              args: fc.args
+            }
+          });
+        }
+
+        conversationHistory.push({
+          role: 'model',
+          parts: modelParts
         });
-      } catch (fetchErr) {
-        if (fetchErr.name === 'TimeoutError' || fetchErr.name === 'AbortError') {
-          throw new Error('Google Gemini API request timed out (60s). Please check your connection or switch to Gemini 3.5 Flash-Lite.');
-        }
-        throw fetchErr;
-      }
 
-      // Auto-retry once on temporary 503 high demand spike
-      if (response.status === 503) {
-        appendToolStep('Model under high demand (503). Retrying in 1.5s...');
-        await new Promise((r) => setTimeout(r, 1500));
+        parts = modelParts;
+        functionCalls = parsed.functionCalls;
+        textParts = parsed.text;
+      } else {
+        const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`;
+
+        // Sanitize history for Gemini Protobuf REST schema (only allow valid fields)
+        const geminiContents = conversationHistory.map((turn) => ({
+          role: turn.role,
+          parts: turn.parts.map((p) => {
+            if (p.functionResponse) {
+              const fr = {
+                name: p.functionResponse.name,
+                response: p.functionResponse.response
+              };
+              if (p.functionResponse.parts) {
+                fr.parts = p.functionResponse.parts;
+              }
+              return { functionResponse: fr };
+            }
+            if (p.functionCall) {
+              return {
+                functionCall: {
+                  name: p.functionCall.name,
+                  args: p.functionCall.args
+                }
+              };
+            }
+            return p;
+          })
+        }));
+
+        const requestBody = {
+          contents: geminiContents,
+          systemInstruction: systemInstruction,
+          tools: tools,
+          generationConfig: {
+            temperature: 0.2
+          }
+        };
+
+        let response;
         try {
           response = await fetch(endpoint, {
             method: 'POST',
@@ -1806,69 +2215,88 @@ ${customInstructions ? 'User Custom Instructions: ' + customInstructions : ''}`
             body: JSON.stringify(requestBody),
             signal: AbortSignal.timeout(60000)
           });
-        } catch (retryErr) {
-          if (retryErr.name === 'TimeoutError' || retryErr.name === 'AbortError') {
-            throw new Error('Google Gemini API request timed out on retry (60s).');
+        } catch (fetchErr) {
+          if (fetchErr.name === 'TimeoutError' || fetchErr.name === 'AbortError') {
+            throw new Error('Google Gemini API request timed out (60s). Please check your connection or switch to Gemini 3.5 Flash-Lite.');
           }
-          throw retryErr;
+          throw fetchErr;
         }
-      }
 
-      if (!response.ok) {
-        const errorText = await response.text();
-        let errorJson = null;
-        try { errorJson = JSON.parse(errorText); } catch (e) {}
-
+        // Auto-retry once on temporary 503 high demand spike
         if (response.status === 503) {
-          appendAssistantMessage(
-            `⚠️ **Google Gemini High Demand (503)**: Model "${model}" is temporarily at capacity.<br/><br/>` +
-            `👉 Try switching to **Gemini 3.5 Flash-Lite** or retrying in a moment.<br/>` +
-            `<button class="action-btn primary" id="switchToFlashLiteBtn" style="margin-top: 8px;">⚡ Switch to Gemini 3.5 Flash-Lite</button>`
-          );
-          setTimeout(() => {
-            const btn = document.getElementById('switchToFlashLiteBtn');
-            if (btn) {
-              btn.addEventListener('click', async () => {
-                const targetModel = 'gemini-3.5-flash-lite';
-                if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
-                  await chrome.storage.local.set({ geminiModel: targetModel });
-                } else {
-                  localStorage.setItem('geminiModel', targetModel);
-                }
-                setQuickModelUI(targetModel);
-                btn.textContent = '✓ Switched to Gemini 3.5 Flash-Lite!';
-                btn.disabled = true;
-                appendToolStep('Switched model to gemini-3.5-flash-lite. Please click Send to retry.');
-              });
+          appendToolStep('Model under high demand (503). Retrying in 1.5s...');
+          await new Promise((r) => setTimeout(r, 1500));
+          try {
+            response = await fetch(endpoint, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(requestBody),
+              signal: AbortSignal.timeout(60000)
+            });
+          } catch (retryErr) {
+            if (retryErr.name === 'TimeoutError' || retryErr.name === 'AbortError') {
+              throw new Error('Google Gemini API request timed out on retry (60s).');
             }
-          }, 100);
-          return;
+            throw retryErr;
+          }
         }
 
-        const msg = errorJson?.error?.message || errorText;
-        throw new Error(`Gemini API error (${response.status}): ${msg}`);
-      }
+        if (!response.ok) {
+          const errorText = await response.text();
+          let errorJson = null;
+          try { errorJson = JSON.parse(errorText); } catch (e) {}
 
-      const data = await response.json();
-      const candidate = data.candidates?.[0];
-      if (!candidate || !candidate.content) {
-        const finishReason = candidate?.finishReason || 'UNKNOWN';
-        if (finishReason === 'MAX_TOKENS') {
-          appendAssistantMessage('⚠️ **Output truncated**: The model reached its maximum token output limit.');
-        } else if (finishReason === 'SAFETY') {
-          appendAssistantMessage('⚠️ **Blocked by safety**: Gemini safety filters blocked generation on this page content.');
-        } else {
-          appendAssistantMessage(`⚠️ Received empty response from Gemini (finishReason: ${finishReason}).`);
+          if (response.status === 503) {
+            appendAssistantMessage(
+              `⚠️ **Google Gemini High Demand (503)**: Model "${model}" is temporarily at capacity.<br/><br/>` +
+              `👉 Try switching to **Gemini 3.5 Flash-Lite** or retrying in a moment.<br/>` +
+              `<button class="action-btn primary" id="switchToFlashLiteBtn" style="margin-top: 8px;">⚡ Switch to Gemini 3.5 Flash-Lite</button>`
+            );
+            setTimeout(() => {
+              const btn = document.getElementById('switchToFlashLiteBtn');
+              if (btn) {
+                btn.addEventListener('click', async () => {
+                  const targetModel = 'gemini-3.5-flash-lite';
+                  if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+                    await chrome.storage.local.set({ geminiModel: targetModel });
+                  } else {
+                    localStorage.setItem('geminiModel', targetModel);
+                  }
+                  setQuickModelUI(targetModel);
+                  btn.textContent = '✓ Switched to Gemini 3.5 Flash-Lite!';
+                  btn.disabled = true;
+                  appendToolStep('Switched model to gemini-3.5-flash-lite. Please click Send to retry.');
+                });
+              }
+            }, 100);
+            return;
+          }
+
+          const msg = errorJson?.error?.message || errorText;
+          throw new Error(`Gemini API error (${response.status}): ${msg}`);
         }
-        break;
+
+        const data = await response.json();
+        const candidate = data.candidates?.[0];
+        if (!candidate || !candidate.content) {
+          const finishReason = candidate?.finishReason || 'UNKNOWN';
+          if (finishReason === 'MAX_TOKENS') {
+            appendAssistantMessage('⚠️ **Output truncated**: The model reached its maximum token output limit.');
+          } else if (finishReason === 'SAFETY') {
+            appendAssistantMessage('⚠️ **Blocked by safety**: Gemini safety filters blocked generation on this page content.');
+          } else {
+            appendAssistantMessage(`⚠️ Received empty response from Gemini (finishReason: ${finishReason}).`);
+          }
+          break;
+        }
+
+        // Add model response to history
+        conversationHistory.push(candidate.content);
+
+        parts = candidate.content.parts || [];
+        functionCalls = parts.filter((p) => p.functionCall).map((p) => p.functionCall);
+        textParts = parts.filter((p) => p.text).map((p) => p.text).join('\n');
       }
-
-      // Add model response to history
-      conversationHistory.push(candidate.content);
-
-      const parts = candidate.content.parts || [];
-      const functionCalls = parts.filter((p) => p.functionCall).map((p) => p.functionCall);
-      const textParts = parts.filter((p) => p.text).map((p) => p.text).join('\n');
 
       if (textParts) {
         appendAssistantMessage(textParts);
@@ -1926,6 +2354,7 @@ ${customInstructions ? 'User Custom Instructions: ' + customInstructions : ''}`
           functionResponses.push({
             functionResponse: {
               name: 'inspect_dom',
+              callId: call.id,
               response: { result: inspectResult }
             }
           });
@@ -1936,6 +2365,7 @@ ${customInstructions ? 'User Custom Instructions: ' + customInstructions : ''}`
           functionResponses.push({
             functionResponse: {
               name: 'dehydrate_dom',
+              callId: call.id,
               response: { dom: formatted }
             }
           });
@@ -1949,6 +2379,7 @@ ${customInstructions ? 'User Custom Instructions: ' + customInstructions : ''}`
             functionResponses.push({
               functionResponse: {
                 name: 'capture_screenshot',
+                callId: call.id,
                 response: {
                   status: 'success',
                   message: 'Visual screenshot of active tab viewport was captured and provided to the model.',
@@ -1972,6 +2403,7 @@ ${customInstructions ? 'User Custom Instructions: ' + customInstructions : ''}`
             functionResponses.push({
               functionResponse: {
                 name: 'capture_screenshot',
+                callId: call.id,
                 response: {
                   status: 'failed',
                   error: shotRes.error || 'Could not capture active tab viewport.'
@@ -2002,6 +2434,7 @@ ${customInstructions ? 'User Custom Instructions: ' + customInstructions : ''}`
           functionResponses.push({
             functionResponse: {
               name: 'apply_userscript',
+              callId: call.id,
               response: {
                 status: alreadyRan ? 'Executed in page' : 'Presented to user for review',
                 success: true
@@ -2015,6 +2448,7 @@ ${customInstructions ? 'User Custom Instructions: ' + customInstructions : ''}`
             functionResponses.push({
               functionResponse: {
                 name: 'get_saved_scripts',
+                callId: call.id,
                 response: {
                   count: all.length,
                   scripts: all.map((s) => ({
@@ -2031,6 +2465,7 @@ ${customInstructions ? 'User Custom Instructions: ' + customInstructions : ''}`
             functionResponses.push({
               functionResponse: {
                 name: 'get_saved_scripts',
+                callId: call.id,
                 response: { error: err.message }
               }
             });
@@ -2050,6 +2485,7 @@ ${customInstructions ? 'User Custom Instructions: ' + customInstructions : ''}`
               functionResponses.push({
                 functionResponse: {
                   name: 'read_saved_script',
+                  callId: call.id,
                   response: {
                     found: true,
                     id: found.id,
@@ -2065,6 +2501,7 @@ ${customInstructions ? 'User Custom Instructions: ' + customInstructions : ''}`
               functionResponses.push({
                 functionResponse: {
                   name: 'read_saved_script',
+                  callId: call.id,
                   response: {
                     found: false,
                     error: `No saved userscript matching "${call.args.nameOrId}" was found in storage.`
@@ -2076,6 +2513,7 @@ ${customInstructions ? 'User Custom Instructions: ' + customInstructions : ''}`
             functionResponses.push({
               functionResponse: {
                 name: 'read_saved_script',
+                callId: call.id,
                 response: { error: err.message }
               }
             });
@@ -2129,6 +2567,7 @@ ${customInstructions ? 'User Custom Instructions: ' + customInstructions : ''}`
             functionResponses.push({
               functionResponse: {
                 name: 'save_userscript',
+                callId: call.id,
                 response: {
                   success: true,
                   id: saved.id,
@@ -2143,6 +2582,7 @@ ${customInstructions ? 'User Custom Instructions: ' + customInstructions : ''}`
             functionResponses.push({
               functionResponse: {
                 name: 'save_userscript',
+                callId: call.id,
                 response: { success: false, error: err.message }
               }
             });
@@ -2451,9 +2891,10 @@ ${customInstructions ? 'User Custom Instructions: ' + customInstructions : ''}`
   if (typeof window !== 'undefined') {
     window.TabSessionManager = TabSessionManager;
     window.ContextCompactor = ContextCompactor;
+    window.OpenRouterAdapter = OpenRouterAdapter;
   }
   if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { TabSessionManager, ContextCompactor };
+    module.exports = { TabSessionManager, ContextCompactor, OpenRouterAdapter };
   }
 
   if (typeof document !== 'undefined' && typeof process === 'undefined') {

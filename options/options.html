@@ -13,57 +13,122 @@
         <img src="../icons/icon48.png" alt="Logo" class="logo" />
         <div>
           <h1>Userscript AI Agent</h1>
-          <p class="subtitle">Configure your Gemini API settings and agent preferences</p>
+          <p class="subtitle">Configure your AI provider (Gemini or OpenRouter) and agent preferences</p>
         </div>
       </div>
     </header>
 
     <main class="card">
       <div class="form-group">
-        <label for="apiKey">Gemini API Key <span class="required">*</span></label>
-        <div class="input-with-action">
-          <input 
-            type="password" 
-            id="apiKey" 
-            name="apiKey" 
-            placeholder="AIzaSy..." 
-            autocomplete="off" 
-            spellcheck="false" 
-          />
-          <button type="button" id="toggleApiKey" class="btn-secondary" title="Show / Hide Key">Show</button>
-        </div>
+        <label for="aiProviderSelect">AI Provider</label>
+        <select id="aiProviderSelect" name="aiProviderSelect">
+          <option value="gemini">Google Gemini (Google AI Studio)</option>
+          <option value="openrouter">OpenRouter (Claude, GPT-4o, DeepSeek, etc.)</option>
+        </select>
         <p class="help-text">
-          An API key is required to interact with the AI agent.
-          <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer">Get a free Gemini API Key from Google AI Studio</a>.
-        </p>
-        <p class="help-text privacy-note">
-          Your key is stored securely in your browser's local storage and only sent directly to Google's Generative Language API.
+          Select which AI backend powers the agent. Gemini connects directly to Google AI Studio; OpenRouter provides access to Claude 3.7, GPT-4o, DeepSeek, and more.
         </p>
       </div>
 
-      <div class="form-group">
-        <label for="modelSelect">Gemini Model</label>
-        <select id="modelSelect" name="modelSelect">
-          <option value="gemini-flash-latest">Gemini Flash Latest (Auto-updates to latest)</option>
-          <option value="gemini-3.5-flash-lite">Gemini 3.5 Flash-Lite</option>
-          <option value="gemini-2.5-flash-lite">Gemini 2.5 Flash-Lite</option>
-          <option value="gemini-2.0-flash-lite">Gemini 2.0 Flash-Lite</option>
-          <option value="gemini-3.8-flash">Gemini 3.8 Flash</option>
-          <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
-          <option value="gemini-2.0-flash">Gemini 2.0 Flash</option>
-          <option value="gemini-1.5-flash">Gemini 1.5 Flash</option>
-          <option value="gemini-1.5-pro">Gemini 1.5 Pro</option>
-          <option value="custom">Custom Model Name...</option>
-        </select>
-        <input 
-          type="text" 
-          id="customModelInput" 
-          placeholder="Enter model name, e.g. gemini-3.5-flash-lite, gemini-3.8-flash" 
-          style="margin-top: 8px; display: none;" 
-        />
-        <p class="help-text">
-          Choose "Gemini 3.5 Flash-Lite", "Gemini Flash Latest", "Gemini 3.8 Flash", or enter a custom model name.
-        </p>
+      <!-- Google Gemini Settings Section -->
+      <div id="geminiSection">
+        <div class="form-group">
+          <label for="apiKey">Gemini API Key <span class="required">*</span></label>
+          <div class="input-with-action">
+            <input 
+              type="password" 
+              id="apiKey" 
+              name="apiKey" 
+              placeholder="AIzaSy..." 
+              autocomplete="off" 
+              spellcheck="false" 
+            />
+            <button type="button" id="toggleApiKey" class="btn-secondary" title="Show / Hide Key">Show</button>
+          </div>
+          <p class="help-text">
+            An API key is required to interact with Google Gemini.
+            <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer">Get a free Gemini API Key from Google AI Studio</a>.
+          </p>
+          <p class="help-text privacy-note">
+            Your key is stored securely in your browser's local storage and only sent directly to Google's Generative Language API.
+          </p>
+        </div>
+
+        <div class="form-group">
+          <label for="modelSelect">Gemini Model</label>
+          <select id="modelSelect" name="modelSelect">
+            <option value="gemini-flash-latest">Gemini Flash Latest (Auto-updates to latest)</option>
+            <option value="gemini-3.5-flash-lite">Gemini 3.5 Flash-Lite</option>
+            <option value="gemini-2.5-flash-lite">Gemini 2.5 Flash-Lite</option>
+            <option value="gemini-2.0-flash-lite">Gemini 2.0 Flash-Lite</option>
+            <option value="gemini-3.8-flash">Gemini 3.8 Flash</option>
+            <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
+            <option value="gemini-2.0-flash">Gemini 2.0 Flash</option>
+            <option value="gemini-1.5-flash">Gemini 1.5 Flash</option>
+            <option value="gemini-1.5-pro">Gemini 1.5 Pro</option>
+            <option value="custom">Custom Model Name...</option>
+          </select>
+          <input 
+            type="text" 
+            id="customModelInput" 
+            placeholder="Enter model name, e.g. gemini-3.5-flash-lite, gemini-3.8-flash" 
+            style="margin-top: 8px; display: none;" 
+          />
+          <p class="help-text">
+            Choose "Gemini 3.5 Flash-Lite", "Gemini Flash Latest", "Gemini 3.8 Flash", or enter a custom model name.
+          </p>
+        </div>
+      </div>
+
+      <!-- OpenRouter Settings Section -->
+      <div id="openrouterSection" style="display: none;">
+        <div class="form-group">
+          <label for="openrouterApiKey">OpenRouter API Key <span class="required">*</span></label>
+          <div class="input-with-action">
+            <input 
+              type="password" 
+              id="openrouterApiKey" 
+              name="openrouterApiKey" 
+              placeholder="sk-or-v1-..." 
+              autocomplete="off" 
+              spellcheck="false" 
+            />
+            <button type="button" id="toggleOpenrouterApiKey" class="btn-secondary" title="Show / Hide Key">Show</button>
+          </div>
+          <p class="help-text">
+            An OpenRouter API key gives access to Claude 3.7, Claude 3.5 Sonnet, GPT-4o, DeepSeek, and 200+ models.
+            <a href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer">Get an API key from OpenRouter</a>.
+          </p>
+          <p class="help-text privacy-note">
+            Your key is stored securely in your browser's local storage and only sent directly to OpenRouter's API.
+          </p>
+        </div>
+
+        <div class="form-group">
+          <label for="openrouterModelSelect">OpenRouter Model</label>
+          <select id="openrouterModelSelect" name="openrouterModelSelect">
+            <option value="anthropic/claude-3.7-sonnet">Claude 3.7 Sonnet (Anthropic)</option>
+            <option value="anthropic/claude-3.5-sonnet">Claude 3.5 Sonnet (Anthropic)</option>
+            <option value="anthropic/claude-3.5-haiku">Claude 3.5 Haiku (Anthropic)</option>
+            <option value="openai/gpt-4o">GPT-4o (OpenAI)</option>
+            <option value="openai/gpt-4o-mini">GPT-4o mini (OpenAI)</option>
+            <option value="deepseek/deepseek-chat">DeepSeek V3 (DeepSeek)</option>
+            <option value="deepseek/deepseek-r1">DeepSeek R1 (DeepSeek)</option>
+            <option value="google/gemini-2.0-flash-001">Gemini 2.0 Flash (Google via OpenRouter)</option>
+            <option value="meta-llama/llama-3.3-70b-instruct">Llama 3.3 70B Instruct (Meta)</option>
+            <option value="qwen/qwen-2.5-72b-instruct">Qwen 2.5 72B Instruct (Alibaba)</option>
+            <option value="custom">Custom OpenRouter Model ID...</option>
+          </select>
+          <input 
+            type="text" 
+            id="customOpenrouterModelInput" 
+            placeholder="Enter OpenRouter model ID, e.g. anthropic/claude-3.7-sonnet:beta" 
+            style="margin-top: 8px; display: none;" 
+          />
+          <p class="help-text">
+            Choose Claude 3.7 Sonnet, GPT-4o, DeepSeek V3, or specify any model ID from <a href="https://openrouter.ai/models" target="_blank" rel="noopener noreferrer">OpenRouter Models</a>.
+          </p>
+        </div>
       </div>
 
       <div class="form-group">

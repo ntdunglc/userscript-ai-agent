@@ -1,9 +1,22 @@
 // options.js - Configuration management for Userscript AI Agent
 
+const aiProviderSelect = document.getElementById('aiProviderSelect');
+const geminiSection = document.getElementById('geminiSection');
+const openrouterSection = document.getElementById('openrouterSection');
+
+// Gemini inputs
 const apiKeyInput = document.getElementById('apiKey');
 const toggleApiKeyBtn = document.getElementById('toggleApiKey');
 const modelSelect = document.getElementById('modelSelect');
 const customModelInput = document.getElementById('customModelInput');
+
+// OpenRouter inputs
+const openrouterApiKeyInput = document.getElementById('openrouterApiKey');
+const toggleOpenrouterApiKeyBtn = document.getElementById('toggleOpenrouterApiKey');
+const openrouterModelSelect = document.getElementById('openrouterModelSelect');
+const customOpenrouterModelInput = document.getElementById('customOpenrouterModelInput');
+
+// Common inputs
 const customInstructionsInput = document.getElementById('customInstructions');
 const maxTurnsInput = document.getElementById('maxTurnsInput');
 const autoCompactCheckbox = document.getElementById('autoCompactCheckbox');
@@ -18,35 +31,94 @@ if (autoCompactCheckbox && compactThresholdInput) {
   });
 }
 
-// Toggle API key visibility
-toggleApiKeyBtn.addEventListener('click', () => {
-  if (apiKeyInput.type === 'password') {
-    apiKeyInput.type = 'text';
-    toggleApiKeyBtn.textContent = 'Hide';
-  } else {
-    apiKeyInput.type = 'password';
-    toggleApiKeyBtn.textContent = 'Show';
+function updateProviderSections() {
+  const provider = aiProviderSelect ? aiProviderSelect.value : 'gemini';
+  if (geminiSection && openrouterSection) {
+    if (provider === 'openrouter') {
+      geminiSection.style.display = 'none';
+      openrouterSection.style.display = 'block';
+    } else {
+      geminiSection.style.display = 'block';
+      openrouterSection.style.display = 'none';
+    }
   }
-});
+}
 
-// Toggle custom model input
-modelSelect.addEventListener('change', () => {
-  if (modelSelect.value === 'custom') {
-    customModelInput.style.display = 'block';
-    customModelInput.focus();
-  } else {
-    customModelInput.style.display = 'none';
+if (aiProviderSelect) {
+  aiProviderSelect.addEventListener('change', updateProviderSections);
+}
+
+// Toggle Gemini API key visibility
+if (toggleApiKeyBtn && apiKeyInput) {
+  toggleApiKeyBtn.addEventListener('click', () => {
+    if (apiKeyInput.type === 'password') {
+      apiKeyInput.type = 'text';
+      toggleApiKeyBtn.textContent = 'Hide';
+    } else {
+      apiKeyInput.type = 'password';
+      toggleApiKeyBtn.textContent = 'Show';
+    }
+  });
+}
+
+// Toggle OpenRouter API key visibility
+if (toggleOpenrouterApiKeyBtn && openrouterApiKeyInput) {
+  toggleOpenrouterApiKeyBtn.addEventListener('click', () => {
+    if (openrouterApiKeyInput.type === 'password') {
+      openrouterApiKeyInput.type = 'text';
+      toggleOpenrouterApiKeyBtn.textContent = 'Hide';
+    } else {
+      openrouterApiKeyInput.type = 'password';
+      toggleOpenrouterApiKeyBtn.textContent = 'Show';
+    }
+  });
+}
+
+// Toggle custom Gemini model input
+if (modelSelect && customModelInput) {
+  modelSelect.addEventListener('change', () => {
+    if (modelSelect.value === 'custom') {
+      customModelInput.style.display = 'block';
+      customModelInput.focus();
+    } else {
+      customModelInput.style.display = 'none';
+    }
+  });
+}
+
+// Toggle custom OpenRouter model input
+if (openrouterModelSelect && customOpenrouterModelInput) {
+  openrouterModelSelect.addEventListener('change', () => {
+    if (openrouterModelSelect.value === 'custom') {
+      customOpenrouterModelInput.style.display = 'block';
+      customOpenrouterModelInput.focus();
+    } else {
+      customOpenrouterModelInput.style.display = 'none';
+    }
+  });
+}
+
+function getEffectiveGeminiModel() {
+  if (modelSelect && modelSelect.value === 'custom') {
+    return (customModelInput ? customModelInput.value.trim() : '') || 'gemini-flash-latest';
   }
-});
+  return modelSelect ? modelSelect.value : 'gemini-flash-latest';
+}
+
+function getEffectiveOpenRouterModel() {
+  if (openrouterModelSelect && openrouterModelSelect.value === 'custom') {
+    return (customOpenrouterModelInput ? customOpenrouterModelInput.value.trim() : '') || 'anthropic/claude-3.7-sonnet';
+  }
+  return openrouterModelSelect ? openrouterModelSelect.value : 'anthropic/claude-3.7-sonnet';
+}
 
 function getEffectiveModel() {
-  if (modelSelect.value === 'custom') {
-    return customModelInput.value.trim() || 'gemini-flash-latest';
-  }
-  return modelSelect.value;
+  const provider = aiProviderSelect ? aiProviderSelect.value : 'gemini';
+  return provider === 'openrouter' ? getEffectiveOpenRouterModel() : getEffectiveGeminiModel();
 }
 
 function showStatus(message, isSuccess = true, autoHideMs = 4000) {
+  if (!statusBox) return;
   statusBox.textContent = message;
   statusBox.className = `status-box ${isSuccess ? 'success' : 'error'}`;
   statusBox.classList.remove('hidden');
@@ -60,19 +132,32 @@ function showStatus(message, isSuccess = true, autoHideMs = 4000) {
 
 // Restore saved settings on page load
 function restoreOptions() {
+  if (typeof chrome === 'undefined' || !chrome.storage || !chrome.storage.local) return;
+
   chrome.storage.local.get(
     {
+      aiProvider: 'gemini',
       geminiApiKey: '',
       geminiModel: 'gemini-flash-latest',
+      openrouterApiKey: '',
+      openrouterModel: 'anthropic/claude-3.7-sonnet',
       customInstructions: '',
       maxTurns: 15,
       autoCompact: true,
       compactThreshold: 30000
     },
     (items) => {
-      apiKeyInput.value = items.geminiApiKey || '';
-      const model = items.geminiModel || 'gemini-flash-latest';
-      const standardOptions = [
+      if (aiProviderSelect) {
+        aiProviderSelect.value = items.aiProvider || 'gemini';
+        updateProviderSections();
+      }
+
+      // Restore Gemini options
+      if (apiKeyInput) {
+        apiKeyInput.value = items.geminiApiKey || '';
+      }
+      const gemModel = items.geminiModel || 'gemini-flash-latest';
+      const standardGemOptions = [
         'gemini-flash-latest',
         'gemini-3.5-flash-lite',
         'gemini-2.5-flash-lite',
@@ -84,18 +169,58 @@ function restoreOptions() {
         'gemini-1.5-pro'
       ];
 
-      if (standardOptions.includes(model)) {
-        modelSelect.value = model;
-        customModelInput.style.display = 'none';
-        customModelInput.value = '';
-      } else {
-        modelSelect.value = 'custom';
-        customModelInput.style.display = 'block';
-        customModelInput.value = model;
+      if (modelSelect) {
+        if (standardGemOptions.includes(gemModel)) {
+          modelSelect.value = gemModel;
+          if (customModelInput) {
+            customModelInput.style.display = 'none';
+            customModelInput.value = '';
+          }
+        } else {
+          modelSelect.value = 'custom';
+          if (customModelInput) {
+            customModelInput.style.display = 'block';
+            customModelInput.value = gemModel;
+          }
+        }
       }
 
-      customInstructionsInput.value = items.customInstructions || '';
-      maxTurnsInput.value = items.maxTurns || 15;
+      // Restore OpenRouter options
+      if (openrouterApiKeyInput) {
+        openrouterApiKeyInput.value = items.openrouterApiKey || '';
+      }
+      const orModel = items.openrouterModel || 'anthropic/claude-3.7-sonnet';
+      const standardOrOptions = [
+        'anthropic/claude-3.7-sonnet',
+        'anthropic/claude-3.5-sonnet',
+        'anthropic/claude-3.5-haiku',
+        'openai/gpt-4o',
+        'openai/gpt-4o-mini',
+        'deepseek/deepseek-chat',
+        'deepseek/deepseek-r1',
+        'google/gemini-2.0-flash-001',
+        'meta-llama/llama-3.3-70b-instruct',
+        'qwen/qwen-2.5-72b-instruct'
+      ];
+
+      if (openrouterModelSelect) {
+        if (standardOrOptions.includes(orModel)) {
+          openrouterModelSelect.value = orModel;
+          if (customOpenrouterModelInput) {
+            customOpenrouterModelInput.style.display = 'none';
+            customOpenrouterModelInput.value = '';
+          }
+        } else {
+          openrouterModelSelect.value = 'custom';
+          if (customOpenrouterModelInput) {
+            customOpenrouterModelInput.style.display = 'block';
+            customOpenrouterModelInput.value = orModel;
+          }
+        }
+      }
+
+      if (customInstructionsInput) customInstructionsInput.value = items.customInstructions || '';
+      if (maxTurnsInput) maxTurnsInput.value = items.maxTurns || 15;
       if (autoCompactCheckbox) {
         autoCompactCheckbox.checked = items.autoCompact !== false;
       }
@@ -109,109 +234,198 @@ function restoreOptions() {
 
 // Save settings to chrome.storage.local
 function saveOptions() {
-  const apiKey = apiKeyInput.value.trim();
-  const model = getEffectiveModel();
-  const customInstructions = customInstructionsInput.value.trim();
-  const maxTurns = parseInt(maxTurnsInput.value, 10) || 15;
+  const provider = aiProviderSelect ? aiProviderSelect.value : 'gemini';
+  const geminiApiKey = apiKeyInput ? apiKeyInput.value.trim() : '';
+  const geminiModel = getEffectiveGeminiModel();
+  const openrouterApiKey = openrouterApiKeyInput ? openrouterApiKeyInput.value.trim() : '';
+  const openrouterModel = getEffectiveOpenRouterModel();
+  const customInstructions = customInstructionsInput ? customInstructionsInput.value.trim() : '';
+  const maxTurns = parseInt(maxTurnsInput ? maxTurnsInput.value : 15, 10) || 15;
   const autoCompact = autoCompactCheckbox ? autoCompactCheckbox.checked : true;
   const compactThreshold = parseInt(compactThresholdInput ? compactThresholdInput.value : 30000, 10) || 30000;
 
-  if (!apiKey) {
+  if (provider === 'gemini' && !geminiApiKey) {
     showStatus('Please enter a valid Gemini API Key.', false);
-    apiKeyInput.focus();
+    if (apiKeyInput) apiKeyInput.focus();
     return;
   }
 
-  saveBtn.disabled = true;
-  saveBtn.textContent = 'Saving...';
+  if (provider === 'openrouter' && !openrouterApiKey) {
+    showStatus('Please enter a valid OpenRouter API Key.', false);
+    if (openrouterApiKeyInput) openrouterApiKeyInput.focus();
+    return;
+  }
+
+  if (saveBtn) {
+    saveBtn.disabled = true;
+    saveBtn.textContent = 'Saving...';
+  }
 
   chrome.storage.local.set(
     {
-      geminiApiKey: apiKey,
-      geminiModel: model,
+      aiProvider: provider,
+      geminiApiKey: geminiApiKey,
+      geminiModel: geminiModel,
+      openrouterApiKey: openrouterApiKey,
+      openrouterModel: openrouterModel,
       customInstructions: customInstructions,
       maxTurns: maxTurns,
       autoCompact: autoCompact,
       compactThreshold: compactThreshold
     },
     () => {
-      saveBtn.disabled = false;
-      saveBtn.textContent = 'Save Settings';
-      showStatus(`Settings saved successfully! Model: ${model}`);
+      if (saveBtn) {
+        saveBtn.disabled = false;
+        saveBtn.textContent = 'Save Settings';
+      }
+      const activeModel = provider === 'openrouter' ? openrouterModel : geminiModel;
+      const providerName = provider === 'openrouter' ? 'OpenRouter' : 'Google Gemini';
+      showStatus(`Settings saved successfully! Provider: ${providerName} (${activeModel})`);
     }
   );
 }
 
-// Test connection with Gemini API
+// Test connection with active AI API
 async function testConnection() {
-  const apiKey = apiKeyInput.value.trim();
-  const model = getEffectiveModel();
+  const provider = aiProviderSelect ? aiProviderSelect.value : 'gemini';
 
-  if (!apiKey) {
-    showStatus('Please enter an API Key first before testing.', false);
-    apiKeyInput.focus();
-    return;
+  if (testBtn) {
+    testBtn.disabled = true;
+    testBtn.textContent = 'Testing...';
   }
-
-  testBtn.disabled = true;
-  testBtn.textContent = 'Testing...';
-  statusBox.classList.add('hidden');
-
-  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`;
+  if (statusBox) statusBox.classList.add('hidden');
 
   try {
-    const response = await fetch(endpoint, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [
-          {
-            parts: [{ text: 'Respond with the single word "READY"' }]
+    if (provider === 'openrouter') {
+      const apiKey = openrouterApiKeyInput ? openrouterApiKeyInput.value.trim() : '';
+      const model = getEffectiveOpenRouterModel();
+
+      if (!apiKey) {
+        showStatus('Please enter an OpenRouter API Key first before testing.', false);
+        if (openrouterApiKeyInput) openrouterApiKeyInput.focus();
+        return;
+      }
+
+      const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey}`,
+          'HTTP-Referer': 'https://github.com/ntdunglc/userscript-ai-agent',
+          'X-Title': 'Userscript AI Agent'
+        },
+        body: JSON.stringify({
+          model: model,
+          messages: [{ role: 'user', content: 'Respond with the single word "READY"' }],
+          max_tokens: 10
+        })
+      });
+
+      if (!response.ok) {
+        const errText = await response.text();
+        let message = `API Error ${response.status}`;
+        try {
+          const json = JSON.parse(errText);
+          if (json.error && json.error.message) {
+            message = json.error.message;
           }
-        ],
-        generationConfig: {
-          maxOutputTokens: 10
+        } catch (e) {
+          message = errText;
         }
-      })
-    });
 
-    if (!response.ok) {
-      const errText = await response.text();
-      let message = `API Error ${response.status}`;
-      try {
-        const json = JSON.parse(errText);
-        if (json.error && json.error.message) {
-          message = json.error.message;
+        if (response.status === 401) {
+          message = 'Invalid OpenRouter API key. Please check your key at openrouter.ai/keys.';
+        } else if (response.status === 402) {
+          message = 'Insufficient OpenRouter credits. Please add credits at openrouter.ai/credits.';
         }
-      } catch (e) {
-        message = errText;
+        showStatus(`Connection failed: ${message}`, false, 8000);
+        return;
       }
 
-      if (response.status === 400 && message.toLowerCase().includes('api key not valid')) {
-        message = 'Invalid API key. Please check your key from Google AI Studio.';
-      } else if (response.status === 404 || (response.status === 400 && message.toLowerCase().includes('not found'))) {
-        message = `Model '${model}' not found or not supported by your API key. Try 'gemini-flash-latest' or 'gemini-2.5-flash'.`;
+      const data = await response.json();
+      const replyText = data.choices?.[0]?.message?.content || '';
+      showStatus(`Connection successful! Connected to OpenRouter "${model}". Response: ${replyText.trim()}`, true, 5000);
+    } else {
+      // Google Gemini
+      const apiKey = apiKeyInput ? apiKeyInput.value.trim() : '';
+      const model = getEffectiveGeminiModel();
+
+      if (!apiKey) {
+        showStatus('Please enter a Gemini API Key first before testing.', false);
+        if (apiKeyInput) apiKeyInput.focus();
+        return;
       }
-      showStatus(`Connection failed: ${message}`, false, 8000);
-      return;
+
+      const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`;
+
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [
+            {
+              parts: [{ text: 'Respond with the single word "READY"' }]
+            }
+          ],
+          generationConfig: {
+            maxOutputTokens: 10
+          }
+        })
+      });
+
+      if (!response.ok) {
+        const errText = await response.text();
+        let message = `API Error ${response.status}`;
+        try {
+          const json = JSON.parse(errText);
+          if (json.error && json.error.message) {
+            message = json.error.message;
+          }
+        } catch (e) {
+          message = errText;
+        }
+
+        if (response.status === 400 && message.toLowerCase().includes('api key not valid')) {
+          message = 'Invalid API key. Please check your key from Google AI Studio.';
+        } else if (response.status === 404 || (response.status === 400 && message.toLowerCase().includes('not found'))) {
+          message = `Model '${model}' not found or not supported by your API key. Try 'gemini-flash-latest' or 'gemini-2.5-flash'.`;
+        }
+        showStatus(`Connection failed: ${message}`, false, 8000);
+        return;
+      }
+
+      const data = await response.json();
+      const replyText = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+      showStatus(`Connection successful! Connected to "${model}". Response: ${replyText.trim()}`, true, 5000);
     }
-
-    const data = await response.json();
-    const replyText = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
-    showStatus(`Connection successful! Connected to "${model}". Response: ${replyText.trim()}`, true, 5000);
   } catch (err) {
     showStatus(`Network or fetch error: ${err.message}`, false, 8000);
   } finally {
-    testBtn.disabled = false;
-    testBtn.textContent = 'Test Connection';
+    if (testBtn) {
+      testBtn.disabled = false;
+      testBtn.textContent = 'Test Connection';
+    }
   }
 }
 
-if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', restoreOptions);
-} else {
-  restoreOptions();
+if (typeof document !== 'undefined') {
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', restoreOptions);
+  } else {
+    restoreOptions();
+  }
+
+  if (saveBtn) saveBtn.addEventListener('click', saveOptions);
+  if (testBtn) testBtn.addEventListener('click', testConnection);
 }
 
-saveBtn.addEventListener('click', saveOptions);
-testBtn.addEventListener('click', testConnection);
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = {
+    getEffectiveGeminiModel,
+    getEffectiveOpenRouterModel,
+    getEffectiveModel,
+    restoreOptions,
+    saveOptions,
+    testConnection
+  };
+}

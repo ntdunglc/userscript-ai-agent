@@ -862,6 +862,353 @@ console.log("imported directly!");`;
     }
   });
 
+  // -------------------------------------------------------------
+  // Test 9: OpenRouter AI Provider Integration Tests
+  // -------------------------------------------------------------
+  console.log('\n9. OpenRouter AI Provider Integration Tests:');
+
+  await test('manifest.json includes https://openrouter.ai/* in host_permissions', () => {
+    const manifest = JSON.parse(fs.readFileSync(path.join(ROOT_DIR, 'manifest.json'), 'utf8'));
+    assert.ok(manifest.host_permissions.includes('https://openrouter.ai/*'), 'Must include openrouter host permission');
+  });
+
+  await test('options.html includes AI provider selector and OpenRouter configuration fields', () => {
+    const optionsHtml = fs.readFileSync(path.join(ROOT_DIR, 'options/options.html'), 'utf8');
+    assert.ok(optionsHtml.includes('id="aiProviderSelect"'), 'Must have aiProviderSelect');
+    assert.ok(optionsHtml.includes('id="geminiSection"'), 'Must have geminiSection');
+    assert.ok(optionsHtml.includes('id="openrouterSection"'), 'Must have openrouterSection');
+    assert.ok(optionsHtml.includes('id="openrouterApiKey"'), 'Must have openrouterApiKey');
+    assert.ok(optionsHtml.includes('id="toggleOpenrouterApiKey"'), 'Must have toggleOpenrouterApiKey');
+    assert.ok(optionsHtml.includes('id="openrouterModelSelect"'), 'Must have openrouterModelSelect');
+    assert.ok(optionsHtml.includes('id="customOpenrouterModelInput"'), 'Must have customOpenrouterModelInput');
+  });
+
+  await test('options.js supports OpenRouter connection testing and model resolution', () => {
+    const optionsJs = fs.readFileSync(path.join(ROOT_DIR, 'options/options.js'), 'utf8');
+    assert.ok(optionsJs.includes('openrouter.ai/api/v1/chat/completions'), 'Must reference OpenRouter completions endpoint');
+    assert.ok(optionsJs.includes('openrouterApiKey'), 'Must manage openrouterApiKey');
+    assert.ok(optionsJs.includes('openrouterModel'), 'Must manage openrouterModel');
+    assert.ok(optionsJs.includes('getEffectiveOpenRouterModel'), 'Must implement getEffectiveOpenRouterModel');
+  });
+
+  await test('sidepanel.html includes OpenRouter optgroup in quickModelSelect', () => {
+    const sidepanelHtml = fs.readFileSync(path.join(ROOT_DIR, 'sidepanel/sidepanel.html'), 'utf8');
+    assert.ok(sidepanelHtml.includes('optgroup label="OpenRouter"'), 'Must have OpenRouter optgroup');
+    assert.ok(sidepanelHtml.includes('anthropic/claude-3.7-sonnet'), 'Must include Claude 3.7 Sonnet');
+    assert.ok(sidepanelHtml.includes('openai/gpt-4o'), 'Must include GPT-4o');
+    assert.ok(sidepanelHtml.includes('deepseek/deepseek-chat'), 'Must include DeepSeek V3');
+  });
+
+  await test('OpenRouterAdapter is exported and available in SidepanelModule', () => {
+    const SidepanelModule = require('../sidepanel/sidepanel.js');
+    assert.ok(SidepanelModule.OpenRouterAdapter, 'OpenRouterAdapter must be exported');
+    assert.strictEqual(typeof SidepanelModule.OpenRouterAdapter.convertGeminiSchemaToOpenAi, 'function');
+    assert.strictEqual(typeof SidepanelModule.OpenRouterAdapter.formatTools, 'function');
+    assert.strictEqual(typeof SidepanelModule.OpenRouterAdapter.formatMessages, 'function');
+    assert.strictEqual(typeof SidepanelModule.OpenRouterAdapter.parseResponse, 'function');
+  });
+
+  await test('OpenRouterAdapter.convertGeminiSchemaToOpenAi converts uppercase types to JSON Schema lowercase', () => {
+    const { OpenRouterAdapter } = require('../sidepanel/sidepanel.js');
+    const geminiSchema = {
+      type: 'OBJECT',
+      properties: {
+        script: { type: 'STRING', description: 'Code snippet' },
+        enabled: { type: 'BOOLEAN' },
+        patterns: {
+          type: 'ARRAY',
+          items: { type: 'STRING' }
+        }
+      },
+      required: ['script']
+    };
+
+    const converted = OpenRouterAdapter.convertGeminiSchemaToOpenAi(geminiSchema);
+    assert.strictEqual(converted.type, 'object');
+    assert.strictEqual(converted.properties.script.type, 'string');
+    assert.strictEqual(converted.properties.enabled.type, 'boolean');
+    assert.strictEqual(converted.properties.patterns.type, 'array');
+    assert.strictEqual(converted.properties.patterns.items.type, 'string');
+    assert.deepStrictEqual(converted.required, ['script']);
+  });
+
+  await test('OpenRouterAdapter.formatTools converts Gemini function_declarations to OpenAI tools format', () => {
+    const { OpenRouterAdapter } = require('../sidepanel/sidepanel.js');
+    const geminiTools = [
+      {
+        function_declarations: [
+          {
+            name: 'inspect_dom',
+            description: 'Inspect page DOM',
+            parameters: {
+              type: 'OBJECT',
+              properties: {
+                script: { type: 'STRING' }
+              },
+              required: ['script']
+            }
+          },
+          {
+            name: 'apply_userscript',
+            description: 'Apply userscript',
+            parameters: {
+              type: 'OBJECT',
+              properties: {
+                name: { type: 'STRING' },
+                script: { type: 'STRING' }
+              },
+              required: ['name', 'script']
+            }
+          }
+        ]
+      }
+    ];
+
+    const openAiTools = OpenRouterAdapter.formatTools(geminiTools);
+    assert.strictEqual(openAiTools.length, 2);
+    assert.strictEqual(openAiTools[0].type, 'function');
+    assert.strictEqual(openAiTools[0].function.name, 'inspect_dom');
+    assert.strictEqual(openAiTools[0].function.parameters.type, 'object');
+    assert.strictEqual(openAiTools[0].function.parameters.properties.script.type, 'string');
+    assert.strictEqual(openAiTools[1].type, 'function');
+    assert.strictEqual(openAiTools[1].function.name, 'apply_userscript');
+  });
+
+  await test('OpenRouterAdapter.formatMessages formats system prompt and multimodal user messages', () => {
+    const { OpenRouterAdapter } = require('../sidepanel/sidepanel.js');
+    const systemInstruction = {
+      parts: [{ text: 'You are Userscript AI Agent.' }]
+    };
+    const history = [
+      {
+        role: 'user',
+        parts: [
+          { text: 'Inspect this page header.' },
+          { inlineData: { mimeType: 'image/jpeg', data: 'BASE64_IMAGE_DATA_123' } }
+        ]
+      }
+    ];
+
+    const messages = OpenRouterAdapter.formatMessages(history, systemInstruction);
+    assert.strictEqual(messages.length, 2);
+    assert.strictEqual(messages[0].role, 'system');
+    assert.strictEqual(messages[0].content, 'You are Userscript AI Agent.');
+
+    assert.strictEqual(messages[1].role, 'user');
+    assert.ok(Array.isArray(messages[1].content), 'User turn with image must have content array');
+    assert.strictEqual(messages[1].content[0].type, 'text');
+    assert.strictEqual(messages[1].content[0].text, 'Inspect this page header.');
+    assert.strictEqual(messages[1].content[1].type, 'image_url');
+    assert.strictEqual(messages[1].content[1].image_url.url, 'data:image/jpeg;base64,BASE64_IMAGE_DATA_123');
+  });
+
+  await test('OpenRouterAdapter.formatMessages handles assistant tool calls and matching tool responses', () => {
+    const { OpenRouterAdapter } = require('../sidepanel/sidepanel.js');
+    const history = [
+      {
+        role: 'user',
+        parts: [{ text: 'Find the ad banner' }]
+      },
+      {
+        role: 'model',
+        parts: [
+          { text: 'Let me inspect the DOM for ads.' },
+          {
+            functionCall: {
+              id: 'call_inspect_1',
+              name: 'inspect_dom',
+              args: { script: 'document.querySelector(".ad-banner")' }
+            }
+          }
+        ]
+      },
+      {
+        role: 'user',
+        parts: [
+          {
+            functionResponse: {
+              name: 'inspect_dom',
+              callId: 'call_inspect_1',
+              response: { result: '<div class="ad-banner">Ad</div>' }
+            }
+          }
+        ]
+      }
+    ];
+
+    const messages = OpenRouterAdapter.formatMessages(history);
+    assert.strictEqual(messages.length, 3);
+    assert.strictEqual(messages[0].role, 'user');
+    assert.strictEqual(messages[0].content, 'Find the ad banner');
+
+    assert.strictEqual(messages[1].role, 'assistant');
+    assert.strictEqual(messages[1].content, 'Let me inspect the DOM for ads.');
+    assert.ok(Array.isArray(messages[1].tool_calls));
+    assert.strictEqual(messages[1].tool_calls.length, 1);
+    assert.strictEqual(messages[1].tool_calls[0].id, 'call_inspect_1');
+    assert.strictEqual(messages[1].tool_calls[0].function.name, 'inspect_dom');
+
+    assert.strictEqual(messages[2].role, 'tool');
+    assert.strictEqual(messages[2].tool_call_id, 'call_inspect_1');
+    assert.strictEqual(messages[2].name, 'inspect_dom');
+    const toolContent = JSON.parse(messages[2].content);
+    assert.strictEqual(toolContent.result, '<div class="ad-banner">Ad</div>');
+  });
+
+  await test('OpenRouterAdapter.formatMessages separates tool response inlineData into follow-up user vision message', () => {
+    const { OpenRouterAdapter } = require('../sidepanel/sidepanel.js');
+    const history = [
+      {
+        role: 'user',
+        parts: [{ text: 'Take a screenshot' }]
+      },
+      {
+        role: 'model',
+        parts: [
+          {
+            functionCall: {
+              id: 'call_shot_1',
+              name: 'capture_screenshot',
+              args: { reason: 'Check banner' }
+            }
+          }
+        ]
+      },
+      {
+        role: 'user',
+        parts: [
+          {
+            functionResponse: {
+              name: 'capture_screenshot',
+              callId: 'call_shot_1',
+              response: {
+                status: 'success',
+                message: 'Screenshot captured',
+                inlineData: {
+                  mimeType: 'image/jpeg',
+                  data: 'SHOT_BASE64_DATA'
+                }
+              }
+            }
+          }
+        ]
+      }
+    ];
+
+    const messages = OpenRouterAdapter.formatMessages(history);
+    assert.strictEqual(messages.length, 4);
+    assert.strictEqual(messages[2].role, 'tool');
+    assert.strictEqual(messages[2].tool_call_id, 'call_shot_1');
+    const parsedToolResp = JSON.parse(messages[2].content);
+    assert.strictEqual(parsedToolResp.inlineData, undefined, 'Base64 inlineData must be stripped from tool JSON content');
+    assert.strictEqual(parsedToolResp.screenshotCaptured, true);
+
+    assert.strictEqual(messages[3].role, 'user');
+    assert.ok(Array.isArray(messages[3].content));
+    assert.strictEqual(messages[3].content[1].type, 'image_url');
+    assert.strictEqual(messages[3].content[1].image_url.url, 'data:image/jpeg;base64,SHOT_BASE64_DATA');
+  });
+
+  await test('OpenRouterAdapter.parseResponse parses message text and function calls from OpenRouter choices', () => {
+    const { OpenRouterAdapter } = require('../sidepanel/sidepanel.js');
+    const mockApiResponse = {
+      id: 'gen-12345',
+      choices: [
+        {
+          message: {
+            role: 'assistant',
+            content: 'I will analyze the layout.',
+            tool_calls: [
+              {
+                id: 'call_abc_1',
+                type: 'function',
+                function: {
+                  name: 'inspect_dom',
+                  arguments: JSON.stringify({ script: 'document.title' })
+                }
+              }
+            ]
+          },
+          finish_reason: 'tool_calls'
+        }
+      ]
+    };
+
+    const parsed = OpenRouterAdapter.parseResponse(mockApiResponse);
+    assert.strictEqual(parsed.text, 'I will analyze the layout.');
+    assert.strictEqual(parsed.functionCalls.length, 1);
+    assert.strictEqual(parsed.functionCalls[0].id, 'call_abc_1');
+    assert.strictEqual(parsed.functionCalls[0].name, 'inspect_dom');
+    assert.deepStrictEqual(parsed.functionCalls[0].args, { script: 'document.title' });
+  });
+
+  await test('OpenRouterAdapter formats Gemini-created history seamlessly for OpenRouter without loss', () => {
+    const { OpenRouterAdapter } = require('../sidepanel/sidepanel.js');
+    const geminiHistory = [
+      {
+        role: 'user',
+        parts: [{ text: 'Hide ads on this site' }]
+      },
+      {
+        role: 'model',
+        parts: [
+          { text: 'Checking for ads...' },
+          {
+            functionCall: {
+              name: 'inspect_dom',
+              args: { script: 'document.querySelectorAll(".ad").length' }
+            }
+          }
+        ]
+      },
+      {
+        role: 'user',
+        parts: [
+          {
+            functionResponse: {
+              name: 'inspect_dom',
+              response: { result: '3' }
+            }
+          }
+        ]
+      },
+      {
+        role: 'model',
+        parts: [
+          { text: 'Found 3 ads. Applying script...' },
+          {
+            functionCall: {
+              name: 'apply_userscript',
+              args: { name: 'Hide Ads', description: 'Hides ads', script: 'document.querySelectorAll(".ad").forEach(e => e.remove());' }
+            }
+          }
+        ]
+      },
+      {
+        role: 'user',
+        parts: [
+          {
+            functionResponse: {
+              name: 'apply_userscript',
+              response: { success: true }
+            }
+          }
+        ]
+      }
+    ];
+
+    const openAiMsgs = OpenRouterAdapter.formatMessages(geminiHistory);
+    assert.strictEqual(openAiMsgs.length, 5);
+
+    const call1Id = openAiMsgs[1].tool_calls[0].id;
+    assert.ok(call1Id, 'Must have generated callId');
+    assert.strictEqual(openAiMsgs[2].tool_call_id, call1Id, 'Tool response must match assistant tool call ID');
+
+    const call2Id = openAiMsgs[3].tool_calls[0].id;
+    assert.ok(call2Id, 'Must have generated callId for second tool call');
+    assert.strictEqual(openAiMsgs[4].tool_call_id, call2Id, 'Second tool response must match second assistant tool call ID');
+  });
+
   console.log(`\n========================================`);
   console.log(`Test Results: ${passed} passed, ${failed} failed`);
   console.log(`========================================\n`);
