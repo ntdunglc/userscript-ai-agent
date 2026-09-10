@@ -107,9 +107,9 @@ function getEffectiveGeminiModel() {
 
 function getEffectiveOpenRouterModel() {
   if (openrouterModelSelect && openrouterModelSelect.value === 'custom') {
-    return (customOpenrouterModelInput ? customOpenrouterModelInput.value.trim() : '') || 'anthropic/claude-3.7-sonnet';
+    return (customOpenrouterModelInput ? customOpenrouterModelInput.value.trim() : '') || 'deepseek/deepseek-v4.1-flash';
   }
-  return openrouterModelSelect ? openrouterModelSelect.value : 'anthropic/claude-3.7-sonnet';
+  return openrouterModelSelect ? openrouterModelSelect.value : 'deepseek/deepseek-v4.1-flash';
 }
 
 function getEffectiveModel() {
@@ -140,7 +140,7 @@ function restoreOptions() {
       geminiApiKey: '',
       geminiModel: 'gemini-flash-latest',
       openrouterApiKey: '',
-      openrouterModel: 'anthropic/claude-3.7-sonnet',
+      openrouterModel: 'deepseek/deepseek-v4.1-flash',
       customInstructions: '',
       maxTurns: 15,
       autoCompact: true,
@@ -159,13 +159,14 @@ function restoreOptions() {
       const gemModel = items.geminiModel || 'gemini-flash-latest';
       const standardGemOptions = [
         'gemini-flash-latest',
-        'gemini-2.5-pro',
-        'gemini-2.5-flash',
-        'gemini-2.5-flash-lite',
-        'gemini-2.0-flash',
-        'gemini-2.0-flash-lite',
+        'gemini-3.8-flash',
+        'gemini-3.7-flash',
+        'gemini-3.6-flash',
+        'gemini-3.5-flash',
         'gemini-3.5-flash-lite',
-        'gemini-3.8-flash'
+        'gemini-3.1-flash-lite',
+        'gemini-2.5-pro',
+        'gemini-2.5-flash'
       ];
 
       if (modelSelect) {
@@ -188,25 +189,34 @@ function restoreOptions() {
       if (openrouterApiKeyInput) {
         openrouterApiKeyInput.value = items.openrouterApiKey || '';
       }
-      const orModel = items.openrouterModel || 'anthropic/claude-3.7-sonnet';
+      const orModel = items.openrouterModel || 'deepseek/deepseek-v4.1-flash';
       const standardOrOptions = [
         'deepseek/deepseek-v4.1-flash',
-        'anthropic/claude-3.7-sonnet',
-        'anthropic/claude-3.7-sonnet:thinking',
-        'anthropic/claude-3.5-sonnet',
-        'anthropic/claude-3.5-haiku',
-        'openai/gpt-4o',
-        'openai/o3-mini',
-        'openai/gpt-4o-mini',
-        'deepseek/deepseek-chat',
+        'deepseek/deepseek-v4-pro-0813',
+        'deepseek/deepseek-v3.2',
         'deepseek/deepseek-r1',
+        'anthropic/claude-fable-5.1',
+        'anthropic/claude-sonnet-5',
+        'anthropic/claude-opus-5',
+        'anthropic/claude-sonnet-4.6',
+        'anthropic/claude-haiku-4.5',
+        'openai/gpt-6-astra',
+        'openai/gpt-6-astra-pro',
+        'openai/gpt-5.6-luna',
+        'openai/gpt-5.4-mini',
+        'openai/gpt-5.3-codex',
+        'google/gemini-3.8-flash',
+        'google/gemini-3.5-flash',
+        'google/gemini-3.5-flash-lite',
         'google/gemini-2.5-pro',
-        'google/gemini-2.5-flash',
-        'google/gemini-2.0-flash-001',
-        'mistralai/codestral-2501',
-        'meta-llama/llama-3.3-70b-instruct',
-        'qwen/qwen-2.5-72b-instruct',
-        'qwen/qwen-2.5-coder-32b-instruct'
+        'qwen/qwen3.8-flash',
+        'qwen/qwen3.8-max-0902',
+        'qwen/qwen3-coder-plus',
+        'mistralai/codestral-2508',
+        'mistralai/devstral-2512',
+        'meta/muse-spark-1.3',
+        'meta-llama/llama-4-maverick',
+        'z-ai/glm-5.3-flash'
       ];
 
       if (openrouterModelSelect) {

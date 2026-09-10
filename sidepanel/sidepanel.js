@@ -32,7 +32,7 @@
       opt.value = model;
       opt.textContent = model.length > 18 ? model.substring(0, 18) + '…' : model;
       const orGroup = quickModelSelect.querySelector('optgroup[label="OpenRouter"]');
-      if (orGroup && (model.includes('/') || model.startsWith('claude') || model.startsWith('gpt') || model.startsWith('deepseek') || model.startsWith('qwen') || model.startsWith('meta-llama') || model.startsWith('mistral') || model.startsWith('codestral') || model.startsWith('o3') || model.startsWith('google/'))) {
+      if (orGroup && (model.includes('/') || model.startsWith('claude') || model.startsWith('gpt') || model.startsWith('deepseek') || model.startsWith('qwen') || model.startsWith('meta') || model.startsWith('mistral') || model.startsWith('codestral') || model.startsWith('devstral') || model.startsWith('o3') || model.startsWith('glm') || model.startsWith('muse') || model.startsWith('google/'))) {
         orGroup.appendChild(opt);
       } else {
         quickModelSelect.appendChild(opt);
@@ -1077,7 +1077,7 @@
     // Quick Model dropdown sync
     const currentConfig = await getConfig();
     const activeModel = currentConfig.aiProvider === 'openrouter'
-      ? (currentConfig.openrouterModel || 'anthropic/claude-3.7-sonnet')
+      ? (currentConfig.openrouterModel || 'deepseek/deepseek-v4.1-flash')
       : (currentConfig.geminiModel || 'gemini-flash-latest');
     setQuickModelUI(activeModel);
 
@@ -1089,10 +1089,13 @@
           selectedModel.startsWith('gpt') ||
           selectedModel.startsWith('deepseek') ||
           selectedModel.startsWith('qwen') ||
-          selectedModel.startsWith('meta-llama') ||
+          selectedModel.startsWith('meta') ||
           selectedModel.startsWith('mistral') ||
           selectedModel.startsWith('codestral') ||
-          selectedModel.startsWith('o3');
+          selectedModel.startsWith('devstral') ||
+          selectedModel.startsWith('o3') ||
+          selectedModel.startsWith('glm') ||
+          selectedModel.startsWith('muse');
         const provider = isOpenRouter ? 'openrouter' : 'gemini';
 
         const updateData = { aiProvider: provider };

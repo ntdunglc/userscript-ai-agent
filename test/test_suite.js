@@ -898,10 +898,10 @@ console.log("imported directly!");`;
   await test('sidepanel.html includes OpenRouter optgroup and modern models in quickModelSelect', () => {
     const sidepanelHtml = fs.readFileSync(path.join(ROOT_DIR, 'sidepanel/sidepanel.html'), 'utf8');
     assert.ok(sidepanelHtml.includes('optgroup label="OpenRouter"'), 'Must have OpenRouter optgroup');
-    assert.ok(sidepanelHtml.includes('anthropic/claude-3.7-sonnet'), 'Must include Claude 3.7 Sonnet');
-    assert.ok(sidepanelHtml.includes('openai/gpt-4o'), 'Must include GPT-4o');
-    assert.ok(sidepanelHtml.includes('deepseek/deepseek-chat'), 'Must include DeepSeek V3');
+    assert.ok(sidepanelHtml.includes('anthropic/claude-fable-5.1'), 'Must include Claude Fable 5.1');
+    assert.ok(sidepanelHtml.includes('openai/gpt-6-astra'), 'Must include GPT-6 Astra');
     assert.ok(sidepanelHtml.includes('deepseek/deepseek-v4.1-flash'), 'Must include DeepSeek V4.1 Flash');
+    assert.ok(sidepanelHtml.includes('gemini-3.8-flash'), 'Must include Gemini 3.8 Flash');
     assert.ok(sidepanelHtml.includes('gemini-2.5-pro'), 'Must include Gemini 2.5 Pro');
   });
 
